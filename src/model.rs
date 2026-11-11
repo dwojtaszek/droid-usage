@@ -16,6 +16,8 @@ pub enum Source {
     OpenCode,
     /// agy (Antigravity CLI) conversations.
     Agy,
+    /// Codex CLI rollout logs under `~/.codex`.
+    Codex,
 }
 
 impl fmt::Display for Source {
@@ -24,6 +26,7 @@ impl fmt::Display for Source {
             Self::Droid => "droid",
             Self::OpenCode => "opencode",
             Self::Agy => "agy",
+            Self::Codex => "codex",
         })
     }
 }

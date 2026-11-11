@@ -7,7 +7,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # Lower bound for the number of tests. Raise it when tests are added. Lowering it needs the user's approval.
-MIN_TEST_COUNT=161
+MIN_TEST_COUNT=173
 
 failed_steps=()
 

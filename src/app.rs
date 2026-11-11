@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::download::Downloads;
 use crate::model::{self, Session};
-use crate::{agy, droid, multipliers, opencode, prices, refresh, report};
+use crate::{agy, codex, droid, multipliers, opencode, prices, refresh, report};
 
 /// Whether prices are refreshed before the report. `--offline` selects `Offline`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,11 @@ pub fn run(
         model::add_source(
             "agy",
             agy::read_sessions(&home.join(".gemini/antigravity-cli")),
+            &mut sessions,
+        ),
+        model::add_source(
+            "codex",
+            codex::read_sessions(&home.join(".codex")),
             &mut sessions,
         ),
     ];
@@ -203,6 +208,45 @@ mod tests {
         assert!(out.contains("By source"), "{out}");
         assert!(err.contains("no price snapshot saved"), "{err}");
         assert!(err.contains("no multiplier snapshot saved"), "{err}");
+    }
+
+    #[test]
+    fn codex_sessions_appear_in_the_priced_report() {
+        let home = ScratchDir::new("app-codex");
+        let logs = home.join(".codex/sessions/2026/10/05");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("rollout.jsonl"), concat!(
+            r#"{"type":"session_meta","payload":{"timestamp":"2026-10-05T15:04:35Z","cwd":"/work/codex-app"}}"#,
+            "\n",
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":0,"output_tokens":1000000}}}}"#,
+        )).unwrap();
+        apply(
+            &home.join(".local/share/droid-usage/prices"),
+            &home.join(".local/share/droid-usage/multipliers"),
+            at(),
+            SAMPLE_TABLE,
+            SAMPLE_PAGE,
+        )
+        .unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run(
+            &home,
+            Mode::Offline,
+            at(),
+            Colors::Off,
+            no_download,
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        let report = String::from_utf8(out).unwrap();
+        assert!(report.contains("codex"), "{report}");
+        assert!(report.contains("codex-app"), "{report}");
+        assert!(report.contains("2000000"), "{report}");
+        assert!(report.contains("10.00"), "{report}");
+        assert!(!String::from_utf8(err).unwrap().contains("codex:"));
     }
 
     #[test]
