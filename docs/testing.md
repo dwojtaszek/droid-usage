@@ -13,7 +13,9 @@ Use the repository scripts from the root; their implementations define the exact
 
 The full gate is not required for every implementation handback. It remains mandatory before merging. In the 2026-11-11 session, full Miri took 640 seconds and whole-crate mutations took 767 seconds. Focused Codex Miri took 11 seconds. These are observations, not runtime budgets. The pre-PR script computes its own time limit; a timeout is a failed gate, not permission to omit checks. Reduce the change or run the full gate.
 
-The two long gates reject a dirty caller tree, then create a temporary detached worktree at `HEAD`, print its full commit SHA, and run there. Later edits in the caller's checkout cannot enter that run. Each snapshot has its own build directory: sharing Cargo output between checkouts can reuse binaries containing a stale `CARGO_MANIFEST_DIR`. Temporary worktrees are removed on exit, including after failed checks. Keep the command's log outside the worktree so it survives cleanup. If unrelated changes are pending, use a separate clean worktree containing the intended commits; preserve those pending changes.
+The two long gates reject a dirty caller tree, then create a temporary detached worktree at `HEAD`, print its full commit SHA, and run there. Later edits in the caller's checkout cannot enter that run. Each snapshot has its own build directory: sharing Cargo output between checkouts can reuse binaries containing a stale `CARGO_MANIFEST_DIR`. Successful snapshots are removed automatically. Failed snapshots are retained at the printed path so `mutants.out` diagnostics and binary fuzz crash inputs remain recoverable. Keep the command's log outside the worktree too. After preserving needed reproducers, remove a failed worktree with `git worktree remove --force <printed-path>` and remove its empty parent directory. If unrelated changes are pending, use a separate clean worktree containing the intended commits; preserve those pending changes.
+
+Scripts clear Git's repository-local environment overrides so a hook's `GIT_DIR`, `GIT_WORK_TREE`, or alternate index cannot redirect operations outside the intended checkout. The pre-PR base is resolved to a commit in the caller's worktree before snapshot dispatch and timeout re-entry; upstream and reflog-relative expressions retain their meaning.
 
 Snapshot isolation pins tracked source. Toolchains, dependencies, and the host's saved price snapshot remain external inputs. A green gate applies to the printed revision; rerun affected checks after changes.
 
@@ -27,7 +29,7 @@ For a focused Cargo check, use the same helper in a subshell. For example:
 (source scripts/common.sh; MIRIFLAGS=-Zmiri-disable-isolation PROPTEST_CASES=8 test_env cargo +nightly miri test --lib -- codex::)
 ```
 
-Run gate regressions with `scripts/selftest-gates.sh`. They test mutant verdicts, time limits, color isolation with `NO_COLOR` set and unset, and snapshot isolation, cleanup, and exit status. The development and long gates run these regressions too. Run the development gate from both parent environments when changing test-environment handling:
+Run gate regressions with `scripts/selftest-gates.sh`. They test mutant verdicts, time limits, color isolation with `NO_COLOR` set and unset, snapshot isolation, successful cleanup, retained failure artifacts, exit status, inherited Git overrides, and caller-relative bases. The development and long gates run these regressions too. Run the development gate from both parent environments when changing test-environment handling:
 
 ```bash
 NO_COLOR=1 scripts/dev-test.sh

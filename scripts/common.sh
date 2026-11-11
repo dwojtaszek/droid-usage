@@ -3,6 +3,11 @@
 
 set -uo pipefail
 
+# Hooks can export repository-local overrides; each script must use its own checkout.
+while IFS= read -r gate_git_variable; do
+    unset "$gate_git_variable"
+done < <(git rev-parse --local-env-vars)
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 export PATH="$HOME/.cargo/bin:$PATH"
 
@@ -31,6 +36,10 @@ snapshot_gate() (
     trap '
         gate_status=$?
         cd "$root" || exit 2
+        if ((gate_status != 0)) && [[ -f $scratch/checkout/.git ]]; then
+            echo "gate failed: snapshot and diagnostics retained at $scratch/checkout" >&2
+            exit "$gate_status"
+        fi
         if [[ -f $scratch/checkout/.git ]]; then
             git worktree remove --force "$scratch/checkout" || gate_status=1
         fi
