@@ -11,6 +11,38 @@ MIN_TEST_COUNT=173
 
 failed_steps=()
 
+# Keep test output independent of the caller's terminal preferences. Binary tests set their own NO_COLOR.
+test_env() (
+    unset NO_COLOR
+    export TERM=xterm-256color COLORTERM=
+    "$@"
+)
+
+# Long gates test a committed snapshot so editing the caller's tree cannot change their inputs.
+snapshot_gate() (
+    check_clean_tree || exit 1
+    local gate=$1
+    shift
+    local revision root scratch gate_status=0
+    revision=$(git rev-parse HEAD) || exit 2
+    root=$PWD
+    scratch=$(mktemp -d) || exit 2
+
+    trap '
+        gate_status=$?
+        cd "$root" || exit 2
+        if [[ -f $scratch/checkout/.git ]]; then
+            git worktree remove --force "$scratch/checkout" || gate_status=1
+        fi
+        rm -rf "$scratch"
+        exit "$gate_status"
+    ' EXIT
+    git worktree add --quiet --detach "$scratch/checkout" "$revision" || exit 2
+    echo "gate snapshot: $revision"
+    DROID_USAGE_GATE_SNAPSHOT=1 CARGO_TARGET_DIR="$scratch/checkout/target" \
+        "$scratch/checkout/scripts/$(basename "$gate")" "$@"
+)
+
 # run_step NAME COMMAND [ARGS...]: runs one check, records a failure, and keeps going.
 # With DRY_RUN=1 it prints the command instead of running it.
 run_step() {
@@ -99,7 +131,7 @@ check_mutants_judged() {
 
 # run_mutants ARGS...: runs cargo-mutants, then judges its misses against the known-equivalent list.
 run_mutants() {
-    cargo mutants "$@"
+    test_env cargo mutants "$@"
     local code=$?
     local status=0
     case $code in

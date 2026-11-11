@@ -8,6 +8,11 @@
 # shellcheck source=scripts/common.sh
 source "$(dirname "$0")/common.sh"
 
+if [[ -z ${DROID_USAGE_GATE_SNAPSHOT:-} && -z ${DRY_RUN:-} ]]; then
+    snapshot_gate "$0" "$@"
+    exit $?
+fi
+
 base=${1:-origin/main}
 if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
     echo "pre-pr-test: unknown base $base (run git fetch first)" >&2
@@ -34,7 +39,7 @@ run_step "shellcheck" shellcheck scripts/*.sh
 run_step "gate self-test" scripts/selftest-gates.sh
 run_step "fmt" cargo fmt --check
 run_step "clippy" cargo clippy --all-targets --all-features -- -D warnings
-run_step "tests" cargo test -q
+run_step "tests" test_env cargo test -q
 run_step "test count" check_test_count
 run_step "docs" check_docs
 if grep -qxE 'Cargo\.toml|Cargo\.lock|deny\.toml' <<<"$changed"; then

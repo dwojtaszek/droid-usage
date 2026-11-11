@@ -5,6 +5,9 @@
 
 set -uo pipefail
 
+# Probe gates create their own snapshots even when this self-test runs inside a long gate.
+unset DROID_USAGE_GATE_SNAPSHOT
+
 scratch=$(mktemp -d) || exit 2
 trap 'cd / && rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/scripts"
@@ -79,6 +82,58 @@ expect_verdict stopped 1
 check "time limit, no mutants" 90 "$(time_limit 0)"
 check "time limit, 32 mutants" 170 "$(time_limit 32)"
 check "time limit, capped" 300 "$(time_limit 100)"
+
+# Color settings belong to the test child, not the calling shell.
+(
+    export NO_COLOR=1
+    test_env printenv NO_COLOR >/dev/null
+    [[ $? == 1 && $(test_env printenv TERM) == xterm-256color && $NO_COLOR == 1 ]]
+) >/dev/null 2>&1
+check "test environment with NO_COLOR set" 0 "$?"
+(
+    unset NO_COLOR
+    test_env printenv NO_COLOR >/dev/null
+    [[ $? == 1 && $(test_env printenv TERM) == xterm-256color ]]
+) >/dev/null 2>&1
+check "test environment with NO_COLOR unset" 0 "$?"
+
+# A tiny committed gate lets us test isolation and cleanup without running Cargo.
+cat >scripts/snapshot-probe.sh <<'PROBE'
+#!/usr/bin/env bash
+# shellcheck source=scripts/common.sh
+source "$(dirname "$0")/common.sh"
+if [[ -z ${DROID_USAGE_GATE_SNAPSHOT:-} ]]; then
+    snapshot_gate "$0" "$@"
+    exit $?
+fi
+[[ $PWD != "$SOURCE_TREE" && $(cat payload) == committed ]] || exit 9
+[[ $CARGO_TARGET_DIR == "$PWD/target" ]] || exit 9
+printf edited >"$SOURCE_TREE/payload"
+[[ $(cat payload) == committed ]] || exit 9
+[[ ${1:-} == argument ]] || exit 9
+exit "${PROBE_EXIT:-0}"
+PROBE
+chmod +x scripts/snapshot-probe.sh
+printf committed >payload
+printf '/mutants.out\n/target\n' >.gitignore
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+git init --quiet .
+git add scripts payload .gitignore
+git -c user.name=gate-test -c user.email=gate-test@example.invalid commit --quiet -m fixture
+
+SOURCE_TREE=$PWD scripts/snapshot-probe.sh argument >/dev/null 2>&1
+check "snapshot stays committed while caller edits" 0 "$?"
+check "caller edits remain intact" edited "$(cat payload)"
+check "successful snapshot is removed" 1 "$(git worktree list --porcelain | grep -c '^worktree ')"
+
+SOURCE_TREE=$PWD scripts/snapshot-probe.sh argument >/dev/null 2>&1
+check "dirty tree is rejected" 1 "$?"
+check "dirty rejection preserves caller edits" edited "$(cat payload)"
+
+printf committed >payload
+PROBE_EXIT=7 SOURCE_TREE=$PWD scripts/snapshot-probe.sh argument >/dev/null 2>&1
+check "snapshot preserves gate exit status" 7 "$?"
+check "failed snapshot is removed" 1 "$(git worktree list --porcelain | grep -c '^worktree ')"
 
 echo
 if ((${#failures[@]})); then
