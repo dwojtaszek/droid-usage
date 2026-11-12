@@ -18,6 +18,8 @@ pub enum Source {
     Agy,
     /// Codex CLI rollout logs under `~/.codex`.
     Codex,
+    /// Pi sessions under `~/.pi/agent/sessions`.
+    Pi,
 }
 
 impl fmt::Display for Source {
@@ -27,6 +29,7 @@ impl fmt::Display for Source {
             Self::OpenCode => "opencode",
             Self::Agy => "agy",
             Self::Codex => "codex",
+            Self::Pi => "pi",
         })
     }
 }

@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 
 use crate::download::Downloads;
 use crate::model::{self, Session};
-use crate::{agy, codex, droid, multipliers, opencode, prices, refresh, report};
+use crate::{agy, codex, droid, multipliers, opencode, pi, prices, refresh, report};
 
 /// Whether prices are refreshed before the report. `--offline` selects `Offline`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,11 @@ pub fn run(
         model::add_source(
             "codex",
             codex::read_sessions(&home.join(".codex")),
+            &mut sessions,
+        ),
+        model::add_source(
+            "pi",
+            pi::read_sessions(&home.join(".pi/agent/sessions")),
             &mut sessions,
         ),
     ];
@@ -247,6 +252,47 @@ mod tests {
         assert!(report.contains("2000000"), "{report}");
         assert!(report.contains("10.00"), "{report}");
         assert!(!String::from_utf8(err).unwrap().contains("codex:"));
+    }
+
+    #[test]
+    fn pi_sessions_appear_in_the_priced_report() {
+        let home = ScratchDir::new("app-pi");
+        let logs = home.join(".pi/agent/sessions/--work-pi-app--");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            logs.join("session.jsonl"),
+            concat!(
+                r#"{"type":"session","version":3,"timestamp":"2026-10-05T15:04:35Z","cwd":"/work/pi-app"}"#,
+                "\n",
+                r#"{"type":"message","message":{"role":"assistant","model":"gpt-5.6-sol","usage":{"input":1000000,"output":1000000,"cost":{"total":0.0}}}}"#,
+            ),
+        )
+        .unwrap();
+        apply(
+            &home.join(".local/share/droid-usage/prices"),
+            &home.join(".local/share/droid-usage/multipliers"),
+            at(),
+            SAMPLE_TABLE,
+            SAMPLE_PAGE,
+        )
+        .unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run(
+            &home,
+            Mode::Offline,
+            at(),
+            Colors::Off,
+            no_download,
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        let report = String::from_utf8(out).unwrap();
+        assert!(report.contains("pi"), "{report}");
+        assert!(report.contains("pi-app"), "{report}");
+        assert!(report.contains("2000000"), "{report}");
+        assert!(report.contains("10.00"), "{report}");
+        assert!(!String::from_utf8(err).unwrap().contains("pi:"));
     }
 
     #[test]
