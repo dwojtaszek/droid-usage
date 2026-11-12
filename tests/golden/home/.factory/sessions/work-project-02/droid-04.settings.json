@@ -1,0 +1,11 @@
+{
+ "model": "glm-5.3-flash",
+ "tokenUsage": {
+  "inputTokens": 27277,
+  "outputTokens": 2042,
+  "cacheCreationTokens": 0,
+  "cacheReadTokens": 47104,
+  "thinkingTokens": 0,
+  "factoryCredits": 2613
+ }
+}

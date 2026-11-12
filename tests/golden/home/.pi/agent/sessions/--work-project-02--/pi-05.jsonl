@@ -1,0 +1,2 @@
+{"type": "session", "version": 3, "timestamp": "2026-11-11T22:38:06.811Z", "cwd": "/work/project-02"}
+{"type": "usage", "usage": {"input": 3113957, "output": 100167, "cacheRead": 15023295, "cacheWrite": 0, "cost": {"total": 8.731913500000003}}, "model": "gemini-4-argon"}

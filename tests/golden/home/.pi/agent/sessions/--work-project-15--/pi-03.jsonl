@@ -1,0 +1,2 @@
+{"type": "session", "version": 3, "timestamp": "2026-08-09T13:10:49.354Z", "cwd": "/work/project-15"}
+{"type": "usage", "usage": {"input": 33826, "output": 627, "cacheRead": 32563, "cacheWrite": 0, "cost": {"total": 0.06032595000000001}}, "model": "gemini-3.6-flash"}

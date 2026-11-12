@@ -1,5 +1,5 @@
 {
- "fetched": "2026-10-24T19:26:44Z",
+ "fetched": "2026-11-11T06:47:41Z",
  "models": {
   "beam-1.0": {
    "promo": null,
@@ -12,6 +12,10 @@
   "claude-fable-5.1": {
    "promo": null,
    "rate": 4.0
+  },
+  "claude-fable-5.2": {
+   "promo": null,
+   "rate": 3.2
   },
   "claude-haiku-4-5-20251001": {
    "promo": null,
@@ -118,6 +122,13 @@
     "through": "2027-01-01"
    },
    "rate": 0.3
+  },
+  "gemini-4-carbon": {
+   "promo": {
+    "after": 1.6,
+    "through": "2026-12-01"
+   },
+   "rate": 0.8
   },
   "glm-5.1": {
    "promo": null,
@@ -229,6 +240,10 @@
    "promo": null,
    "rate": 4.8
   },
+  "gpt-6.1-terra": {
+   "promo": null,
+   "rate": 0.4
+  },
   "grok-4.5": {
    "promo": null,
    "rate": 0.8
@@ -253,6 +268,10 @@
    "promo": null,
    "rate": 1.2
   },
+  "kimi-k3.1-pro": {
+   "promo": null,
+   "rate": 0.8
+  },
   "minimax-m2.7": {
    "promo": null,
    "rate": 0.12
@@ -274,6 +293,10 @@
    "rate": 0.6
   },
   "muse-spark-1.2": {
+   "promo": null,
+   "rate": 0.5
+  },
+  "muse-spark-1.3": {
    "promo": null,
    "rate": 0.5
   },

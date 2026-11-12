@@ -37,7 +37,10 @@ from datetime import datetime
 DROID_SAMPLE = 10
 AGY_WITH_TOKENS = 6
 AGY_WITHOUT_TOKENS = 2
+CODEX_SAMPLE = 8
+PI_SAMPLE = 6
 DROID_TOKEN_KEYS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]
+PI_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite"]
 OPENCODE_COLUMNS = [
     "directory",
     "model",
@@ -349,6 +352,202 @@ def check_transcript(reduced, started, totals, path):
         raise SystemExit(f"reduced transcript differs for {path}")
 
 
+def nonneg_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def parse_codex_usage(usage):
+    if not isinstance(usage, dict):
+        return None
+    raw_in = usage.get("input_tokens")
+    raw_out = usage.get("output_tokens")
+    if not isinstance(raw_in, int) or isinstance(raw_in, bool) or raw_in < 0:
+        return None
+    if not isinstance(raw_out, int) or isinstance(raw_out, bool) or raw_out < 0:
+        return None
+    cache_read = nonneg_int(usage.get("cached_input_tokens"))
+    cache_write = nonneg_int(usage.get("cache_write_input_tokens"))
+    return {
+        "input": max(0, raw_in - cache_read - cache_write),
+        "output": raw_out,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+    }
+
+
+def codex_totals(values):
+    started_str, started, project, model = None, None, None, None
+    totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    for event in values:
+        kind = event.get("type")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if kind == "session_meta" and started is None:
+            ts = payload.get("timestamp") if isinstance(payload.get("timestamp"), str) else None
+            at = parse_time(ts)
+            if at is not None:
+                started_str, started = ts, at
+                project = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+        elif kind == "turn_context":
+            if isinstance(payload.get("model"), str):
+                model = payload["model"]
+        elif kind == "event_msg" and payload.get("type") == "token_count":
+            info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+            parsed = parse_codex_usage(info.get("total_token_usage"))
+            if parsed is not None:
+                totals = parsed
+        elif kind == "token_usage_record":
+            parsed = parse_codex_usage(payload.get("thread_token_usage"))
+            if parsed is not None:
+                totals = parsed
+    return started_str, started, project, model, totals
+
+
+def codex(home, out, projects, summary):
+    root = os.path.join(home, ".codex")
+    files = sorted(
+        path
+        for sub in ("sessions", "archived_sessions")
+        for path in glob.glob(os.path.join(root, sub, "**", "*.jsonl"), recursive=True)
+    )
+    usable, without_usage, broken = [], [], []
+    for path in files:
+        _, started, _, _, totals = codex_totals(read_transcript(path))
+        if started is None:
+            broken.append(path)
+        elif sum(totals.values()) > 0:
+            usable.append(path)
+        else:
+            without_usage.append(path)
+
+    models = set()
+    out_root = os.path.join(out, ".codex/sessions")
+    for index, path in enumerate(stride(usable, CODEX_SAMPLE) + without_usage[:2], 1):
+        started_str, started, real_project, model, totals = codex_totals(read_transcript(path))
+        project = project_path(real_project, projects)
+        meta_payload = {"timestamp": started_str}
+        if project is not None:
+            meta_payload["cwd"] = project
+        lines = [{"type": "session_meta", "payload": meta_payload}]
+        if model:
+            models.add(model)
+            lines.append({"type": "turn_context", "payload": {"model": model}})
+        if sum(totals.values()) > 0:
+            lines.append(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": totals["input"]
+                                + totals["cache_read"]
+                                + totals["cache_write"],
+                                "cached_input_tokens": totals["cache_read"],
+                                "cache_write_input_tokens": totals["cache_write"],
+                                "output_tokens": totals["output"],
+                            }
+                        },
+                    },
+                }
+            )
+        reduced = os.path.join(out_root, f"codex-{index:02d}.jsonl")
+        write_lines(reduced, lines)
+        if codex_totals(read_transcript(reduced))[1:] != (started, project, model, totals):
+            raise SystemExit(f"reduced codex transcript differs for {path}")
+        summary.add("codex", model=model, tokens=sum(totals.values()))
+
+    summary.skipped["codex"] = len(broken)
+    return models
+
+
+def pi_totals(values):
+    started_str, started, project, model = None, None, None, None
+    totals = {key: 0 for key in PI_TOKEN_KEYS}
+    cost = None
+
+    def add_usage(usage):
+        nonlocal cost
+        if not isinstance(usage, dict):
+            return
+        raw_in, raw_out = usage.get("input"), usage.get("output")
+        if not isinstance(raw_in, int) or isinstance(raw_in, bool) or raw_in < 0:
+            return
+        if not isinstance(raw_out, int) or isinstance(raw_out, bool) or raw_out < 0:
+            return
+        for key in PI_TOKEN_KEYS:
+            totals[key] += nonneg_int(usage.get(key))
+        raw_cost = (usage.get("cost") or {}).get("total") if isinstance(usage.get("cost"), dict) else None
+        if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool) and raw_cost > 0:
+            cost = (cost or 0.0) + float(raw_cost)
+
+    for entry in values:
+        kind = entry.get("type")
+        if kind == "session" and started is None:
+            ts = entry.get("timestamp") if isinstance(entry.get("timestamp"), str) else None
+            at = parse_time(ts)
+            if at is not None:
+                started_str, started = ts, at
+                project = entry.get("cwd") if isinstance(entry.get("cwd"), str) else None
+        elif kind == "model_change":
+            if isinstance(entry.get("modelId"), str):
+                model = entry["modelId"]
+        elif kind == "message":
+            msg = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+            if isinstance(msg.get("model"), str):
+                model = msg["model"]
+            add_usage(msg.get("usage"))
+        elif kind in ("usage", "compaction", "branch_summary"):
+            if isinstance(entry.get("model"), str):
+                model = entry["model"]
+            add_usage(entry.get("usage"))
+    return started_str, started, project, model, totals, cost
+
+
+def pi(home, out, projects, summary):
+    root = os.path.join(home, ".pi/agent/sessions")
+    files = sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
+    usable, without_usage, broken = [], [], []
+    for path in files:
+        _, started, _, _, totals, _ = pi_totals(read_transcript(path))
+        if started is None:
+            broken.append(path)
+        elif sum(totals.values()) > 0:
+            usable.append(path)
+        else:
+            without_usage.append(path)
+
+    models = set()
+    out_root = os.path.join(out, ".pi/agent/sessions")
+    for index, path in enumerate(stride(usable, PI_SAMPLE) + without_usage[:2], 1):
+        started_str, started, real_project, model, totals, cost = pi_totals(read_transcript(path))
+        project = project_path(real_project, projects)
+        folder = f"--{project.strip('/').replace('/', '-')}--" if project else "--no-project--"
+        header = {"type": "session", "version": 3, "timestamp": started_str}
+        if project is not None:
+            header["cwd"] = project
+        lines = [header]
+        if model:
+            models.add(model)
+        if sum(totals.values()) > 0 or cost is not None:
+            usage = dict(totals)
+            if cost is not None:
+                usage["cost"] = {"total": cost}
+            entry = {"type": "usage", "usage": usage}
+            if model:
+                entry["model"] = model
+            lines.append(entry)
+        elif model:
+            lines.append({"type": "model_change", "modelId": model})
+        reduced = os.path.join(out_root, folder, f"pi-{index:02d}.jsonl")
+        write_lines(reduced, lines)
+        if pi_totals(read_transcript(reduced))[1:] != (started, project, model, totals, cost):
+            raise SystemExit(f"reduced pi transcript differs for {path}")
+        summary.add("pi", model=model, tokens=sum(totals.values()))
+
+    summary.skipped["pi"] = len(broken)
+    return models
+
+
 def snapshots(home, out, models):
     base = os.path.join(home, ".local/share/droid-usage")
     price_files = sorted(glob.glob(os.path.join(base, "prices", "*.json")))
@@ -414,6 +613,8 @@ def main():
     models |= droid(home, out, projects, summary)
     models |= opencode(home, out, projects, summary)
     models |= agy(home, out, summary)
+    models |= codex(home, out, projects, summary)
+    models |= pi(home, out, projects, summary)
     kept = snapshots(home, out, models)
     summary.show(kept)
 

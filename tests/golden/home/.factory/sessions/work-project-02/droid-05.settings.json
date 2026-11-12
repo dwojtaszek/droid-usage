@@ -1,0 +1,11 @@
+{
+ "model": "gpt-5.5",
+ "tokenUsage": {
+  "inputTokens": 146169,
+  "outputTokens": 10520,
+  "cacheCreationTokens": 0,
+  "cacheReadTokens": 906240,
+  "thinkingTokens": 4195,
+  "factoryCredits": 599831
+ }
+}

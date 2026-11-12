@@ -1,0 +1,2 @@
+{"type": "session", "version": 3, "timestamp": "2026-08-23T10:31:36.860Z", "cwd": "/work/project-06"}
+{"type": "usage", "usage": {"input": 270374, "output": 2708, "cacheRead": 0, "cacheWrite": 0}, "model": "dom-best"}

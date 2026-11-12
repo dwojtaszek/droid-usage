@@ -4,8 +4,6 @@ Read `/home/dom/.agents/SHARED-AGENT-RULES.md` before coding.
 
 ## Scope and Rust
 
-Ponytail controls scope; its source is `/home/dom/.gemini/config/plugins/ponytail/AGENTS.md`. End replies with what was skipped or not checked and any material risk.
-
 Read [.factory/skills/rust-best-practices/SKILL.md](.factory/skills/rust-best-practices/SKILL.md) before writing, reviewing, or refactoring Rust. This is an application: use concrete types and existing patterns. Library-only builders, mocks, sealed traits, and documentation rules apply only to actual library APIs when requested. Add newtypes only for a real value-mixup risk. Comment why. Keep refactors inside the requested modules and smells; preserve trust-boundary validation and data-loss prevention.
 
 ## Development and review
