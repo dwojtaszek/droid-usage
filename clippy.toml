@@ -1,5 +1,22 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
-allow-print-in-tests = true
-allow-dbg-in-tests = true
+# Private application (publish = false): do not suppress signature lints on pub items.
+avoid-breaking-exported-api = false
+enforce-iter-loop-reborrow = true
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use BTreeMap so iteration and output order stay deterministic" },
+    { path = "std::collections::HashSet", reason = "use BTreeSet so iteration and output order stay deterministic" },
+    { path = "chrono::Local", reason = "use Utc or inject a DateTime<Utc> so reports and tests do not depend on the host timezone" },
+]
+
+disallowed-methods = [
+    { path = "chrono::Utc::now", reason = "pass now: DateTime<Utc> from main so library code and tests stay deterministic" },
+    { path = "std::time::SystemTime::now", reason = "pass a clock from main so library code and tests stay deterministic" },
+    { path = "std::env::var", reason = "read environment variables only in main and pass values into the library" },
+    { path = "std::env::var_os", reason = "read environment variables only in main and pass values into the library" },
+    { path = "std::env::vars", reason = "read environment variables only in main and pass values into the library" },
+    { path = "std::env::vars_os", reason = "read environment variables only in main and pass values into the library" },
+    { path = "std::env::home_dir", reason = "deprecated; read HOME in main and pass &Path into the library" },
+]

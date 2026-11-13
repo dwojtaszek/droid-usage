@@ -12,6 +12,10 @@ use droid_usage::{app, cli, download, multipliers, prices};
 /// How long each download may take before it is abandoned.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "CLI entry point reads the host environment and wall clock"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let mode = cli::parse_args(env::args().skip(1))?;
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);

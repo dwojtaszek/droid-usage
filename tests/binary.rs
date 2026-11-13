@@ -1,11 +1,5 @@
 //! Runs the built binary against a scratch home folder, so the entry point is tested too.
 
-// Setup helpers unwrap on purpose: a failed setup should fail the test loudly.
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration tests fail loudly on setup errors"
-)]
-
 pub mod common;
 
 use std::path::Path;

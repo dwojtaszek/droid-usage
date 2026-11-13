@@ -246,6 +246,10 @@ fn styled_row(cells: Vec<String>, numeric_from: usize, kind: Kind, colors: Color
 }
 
 /// Cuts the middle of `text` to fit `max` terminal columns, marking the cut with `…`. Wide characters count as two columns. Text that already fits is returned unchanged.
+#[expect(
+    clippy::string_slice,
+    reason = "indices come from char_indices and sit on UTF-8 char boundaries"
+)]
 fn shorten(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_owned();
@@ -434,7 +438,6 @@ pub fn write_report(out: &mut impl Write, sessions: &[Session], colors: Colors) 
 mod tests {
     use chrono::{TimeZone, Utc};
     use proptest::prelude::{prop, prop_assert, prop_assert_eq, proptest};
-    use unicode_width::UnicodeWidthStr;
 
     use super::*;
     use crate::model::{Source, parse_timestamp};
