@@ -208,6 +208,10 @@ fn valid_multiplier(rate: f64) -> Option<f64> {
 }
 
 /// Reads a promotion note such as `<sup>†</sup> Promotional pricing. GPT-5.6 Sol bills at 1.6× through November 22, 2026, then returns to 2×.`
+#[expect(
+    clippy::map_err_ignore,
+    reason = "any date parse failure reports the full note line via PageError::Note"
+)]
 fn note(line: &str) -> Result<Note, PageError> {
     let fail = || PageError::Note(line.to_owned());
     let text = line
@@ -390,10 +394,10 @@ pub fn save(dir: &Path, snapshot: &Snapshot) -> io::Result<Refresh> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
     use std::fs;
 
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
     use proptest::prelude::{prop, prop_assert, prop_assert_eq, proptest};
 
     use super::*;

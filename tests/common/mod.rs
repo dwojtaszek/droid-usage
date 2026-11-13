@@ -1,11 +1,5 @@
 //! Scratch folders shared by the integration tests.
 
-// Setup helpers unwrap on purpose: a failed setup should fail the test loudly.
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration tests fail loudly on setup errors"
-)]
-
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};

@@ -1,11 +1,5 @@
 //! Reader tests against real folders and databases, through the public API.
 
-// Setup helpers unwrap on purpose: a failed setup should fail the test loudly.
-#![expect(
-    clippy::unwrap_used,
-    reason = "integration tests fail loudly on setup errors"
-)]
-
 pub mod common;
 
 use std::fs;

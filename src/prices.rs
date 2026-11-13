@@ -433,7 +433,7 @@ pub fn record_check(dir: &Path, now: DateTime<Utc>) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
     use proptest::prelude::{prop_assert, proptest};
 
     use super::*;
