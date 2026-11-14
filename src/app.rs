@@ -4,14 +4,15 @@
 
 use std::error::Error;
 use std::fmt::Display;
-use std::io::{ErrorKind, Write};
-use std::path::Path;
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
 use crate::download::Downloads;
-use crate::model::{self, Session};
-use crate::{agy, codex, droid, multipliers, opencode, pi, prices, refresh, report};
+use crate::model::{self, Session, Source};
+use crate::snapshots::Loaded;
+use crate::{agy, codex, droid, multipliers, opencode, pi, prices, pricing, refresh, report};
 
 /// Whether prices are refreshed before the report. `--offline` selects `Offline`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,49 @@ pub enum Mode {
     Online,
     /// Use the saved snapshots only.
     Offline,
+}
+
+impl Mode {
+    /// Pairs this CLI mode with a download callback for online runs.
+    #[must_use]
+    pub fn with_download<F>(self, download: F) -> SourceRefresh<F> {
+        match self {
+            Self::Offline => SourceRefresh::Offline,
+            Self::Online => SourceRefresh::Online(download),
+        }
+    }
+}
+
+/// Whether and how saved price snapshots are refreshed for one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRefresh<F> {
+    /// Use the saved snapshots only.
+    Offline,
+    /// Download fresh snapshots with `F` when older than a day.
+    Online(F),
+}
+
+impl SourceRefresh<fn() -> Result<Downloads, Box<dyn Error>>> {
+    /// Offline mode without needing a dummy download callback.
+    #[must_use]
+    pub const fn offline() -> Self {
+        Self::Offline
+    }
+}
+
+struct SnapshotDirs {
+    prices: PathBuf,
+    multipliers: PathBuf,
+}
+
+impl SnapshotDirs {
+    fn under(home: &Path) -> Self {
+        let data = home.join(".local/share/droid-usage");
+        Self {
+            prices: data.join("prices"),
+            multipliers: data.join("multipliers"),
+        }
+    }
 }
 
 /// Whether standard output is a terminal.
@@ -49,97 +93,99 @@ pub const fn use_color(stdout: Stdout, no_color: NoColor) -> report::Colors {
     }
 }
 
+type SourceReader = fn(&Path) -> Result<model::Read, String>;
+
 /// Runs the report. The report goes to `out`. Warnings go to `err`.
 ///
 /// # Errors
 ///
 /// Returns an error when a saved snapshot cannot be read or the report cannot be written. An unreadable source is only a warning.
-pub fn run(
+pub fn run<F>(
     home: &Path,
-    mode: Mode,
+    refresh_mode: SourceRefresh<F>,
     now: DateTime<Utc>,
     colors: report::Colors,
-    download: impl FnOnce() -> Result<Downloads, Box<dyn Error>>,
     out: &mut impl Write,
     err: &mut impl Write,
-) -> Result<(), Box<dyn Error>> {
-    let data_dir = home.join(".local/share/droid-usage");
-    let prices_dir = data_dir.join("prices");
-    let multipliers_dir = data_dir.join("multipliers");
+) -> Result<(), Box<dyn Error>>
+where
+    F: FnOnce() -> Result<Downloads, Box<dyn Error>>,
+{
+    let dirs = SnapshotDirs::under(home);
 
     let mut sessions: Vec<Session> = Vec::new();
-    let source_warnings = [
-        model::add_source(
-            "droid",
-            droid::read_sessions(&home.join(".factory/sessions")),
-            &mut sessions,
+    let readers: [(Source, &str, SourceReader); 5] = [
+        (Source::Droid, ".factory/sessions", |path| {
+            droid::read_sessions(path).map_err(|error| error.to_string())
+        }),
+        (
+            Source::OpenCode,
+            ".local/share/opencode/opencode.db",
+            |path| opencode::read_sessions(path).map_err(|error| error.to_string()),
         ),
-        model::add_source(
-            "opencode",
-            opencode::read_sessions(&home.join(".local/share/opencode/opencode.db")),
-            &mut sessions,
-        ),
-        model::add_source(
-            "agy",
-            agy::read_sessions(&home.join(".gemini/antigravity-cli")),
-            &mut sessions,
-        ),
-        model::add_source(
-            "codex",
-            codex::read_sessions(&home.join(".codex")),
-            &mut sessions,
-        ),
-        model::add_source(
-            "pi",
-            pi::read_sessions(&home.join(".pi/agent/sessions")),
-            &mut sessions,
-        ),
+        (Source::Agy, ".gemini/antigravity-cli", |path| {
+            agy::read_sessions(path).map_err(|error| error.to_string())
+        }),
+        (Source::Codex, ".codex", |path| {
+            codex::read_sessions(path).map_err(|error| error.to_string())
+        }),
+        (Source::Pi, ".pi/agent/sessions", |path| {
+            pi::read_sessions(path).map_err(|error| error.to_string())
+        }),
     ];
-    for warning in source_warnings.into_iter().flatten() {
+    for (source, rel_path, read) in readers {
+        if let Some(warning) =
+            model::add_source(source.as_str(), read(&home.join(rel_path)), &mut sessions)
+        {
+            warn(err, warning);
+        }
+    }
+
+    if let SourceRefresh::Online(download) = refresh_mode
+        && let Some(warning) =
+            refresh::refresh_prices(&dirs.prices, &dirs.multipliers, now, download)
+    {
         warn(err, warning);
     }
 
-    let refresh_warning = match mode {
-        Mode::Offline => None,
-        Mode::Online => refresh::refresh_prices(&prices_dir, &multipliers_dir, now, download),
-    };
-    if let Some(warning) = refresh_warning {
-        warn(err, warning);
-    }
-
-    let prices_read = prices::read(&prices_dir)?;
-    for name in &prices_read.skipped {
-        warn(err, format!("skipped unreadable price snapshot {name}"));
-    }
-    let book = prices_read.book;
-    if book.is_empty() {
-        warn(
-            err,
-            "no price snapshot saved; sessions without a recorded cost are left blank",
-        );
-    }
-    let multipliers_read = multipliers::read(&multipliers_dir)?;
-    for name in &multipliers_read.skipped {
-        warn(
-            err,
-            format!("skipped unreadable multiplier snapshot {name}"),
-        );
-    }
-    let multiplier_book = multipliers_read.book;
-    if multiplier_book.is_empty() {
-        warn(
-            err,
-            "no multiplier snapshot saved; Droid sessions are left blank",
-        );
-    }
-    prices::price_sessions(&mut sessions, &book);
-    multipliers::price_droid_sessions(&mut sessions, &book, &multiplier_book);
+    let book = read_book(
+        err,
+        "price",
+        "no price snapshot saved; sessions without a recorded cost are left blank",
+        prices::read(&dirs.prices),
+        prices::PriceBook::is_empty,
+    )?;
+    let multiplier_book = read_book(
+        err,
+        "multiplier",
+        "no multiplier snapshot saved; Droid sessions are left blank",
+        multipliers::read(&dirs.multipliers),
+        multipliers::MultiplierBook::is_empty,
+    )?;
+    pricing::price_sessions(&mut sessions, &book, &multiplier_book);
 
     // Exit quietly when the output is piped into something that stops reading, like `head`.
     match report::write_report(out, &sessions, colors) {
         Err(error) if error.kind() != ErrorKind::BrokenPipe => Err(error.into()),
         _ => Ok(()),
     }
+}
+
+fn read_book<B>(
+    err: &mut impl Write,
+    kind: &str,
+    empty_note: &str,
+    read: io::Result<Loaded<B>>,
+    is_empty: impl FnOnce(&B) -> bool,
+) -> io::Result<B> {
+    let loaded = read?;
+    for name in &loaded.skipped {
+        warn(err, format!("skipped unreadable {kind} snapshot {name}"));
+    }
+    if is_empty(&loaded.book) {
+        warn(err, empty_note);
+    }
+    Ok(loaded.book)
 }
 
 /// Writes a warning line. Failing to write one is not worth stopping for.
@@ -149,12 +195,13 @@ fn warn(err: &mut impl Write, message: impl Display) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io};
+    use std::fs;
 
     use super::*;
     use crate::refresh::apply;
     use crate::report::Colors;
-    use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir, no_download};
+    use crate::snapshots::last_checked;
+    use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir};
 
     fn at() -> DateTime<Utc> {
         use chrono::TimeZone;
@@ -194,15 +241,27 @@ mod tests {
     }
 
     #[test]
+    fn mode_pairs_with_download_only_when_online() {
+        let download = || -> Result<Downloads, Box<dyn Error>> { Err("unused".into()) };
+        assert!(matches!(
+            Mode::Offline.with_download(download),
+            SourceRefresh::Offline
+        ));
+        assert!(matches!(
+            Mode::Online.with_download(download),
+            SourceRefresh::Online(_)
+        ));
+    }
+
+    #[test]
     fn offline_run_with_nothing_saved_warns_and_still_reports() {
         let home = ScratchDir::new("app-empty");
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::Off,
-            no_download,
             &mut out,
             &mut err,
         )
@@ -227,9 +286,10 @@ mod tests {
             "\n",
             r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":0,"output_tokens":1000000}}}}"#,
         )).unwrap();
+        let dirs = SnapshotDirs::under(&home);
         apply(
-            &home.join(".local/share/droid-usage/prices"),
-            &home.join(".local/share/droid-usage/multipliers"),
+            &dirs.prices,
+            &dirs.multipliers,
             at(),
             SAMPLE_TABLE,
             SAMPLE_PAGE,
@@ -238,10 +298,9 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::Off,
-            no_download,
             &mut out,
             &mut err,
         )
@@ -268,9 +327,10 @@ mod tests {
             ),
         )
         .unwrap();
+        let dirs = SnapshotDirs::under(&home);
         apply(
-            &home.join(".local/share/droid-usage/prices"),
-            &home.join(".local/share/droid-usage/multipliers"),
+            &dirs.prices,
+            &dirs.multipliers,
             at(),
             SAMPLE_TABLE,
             SAMPLE_PAGE,
@@ -279,10 +339,9 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::Off,
-            no_download,
             &mut out,
             &mut err,
         )
@@ -298,16 +357,15 @@ mod tests {
     #[test]
     fn a_corrupt_snapshot_is_named_in_a_warning() {
         let home = ScratchDir::new("app-corrupt");
-        let prices_dir = home.join(".local/share/droid-usage/prices");
-        fs::create_dir_all(&prices_dir).unwrap();
-        fs::write(prices_dir.join("20261001T000000Z.json"), "{truncated").unwrap();
+        let dirs = SnapshotDirs::under(&home);
+        fs::create_dir_all(&dirs.prices).unwrap();
+        fs::write(dirs.prices.join("20261001T000000Z.json"), "{truncated").unwrap();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::Off,
-            no_download,
             &mut out,
             &mut err,
         )
@@ -327,10 +385,9 @@ mod tests {
         let download = || Err("connection refused".into());
         run(
             &home,
-            Mode::Online,
+            SourceRefresh::Online(download),
             at(),
             Colors::Off,
-            download,
             &mut out,
             &mut err,
         )
@@ -357,10 +414,9 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Online,
+            SourceRefresh::Online(download),
             at(),
             Colors::Off,
-            download,
             &mut out,
             &mut err,
         )
@@ -370,7 +426,7 @@ mod tests {
         assert!(!err.contains("no price snapshot saved"), "{err}");
         assert!(!err.contains("no multiplier snapshot saved"), "{err}");
         assert!(
-            home.join(".local/share/droid-usage/prices").is_dir(),
+            SnapshotDirs::under(&home).prices.is_dir(),
             "a successful download creates the prices directory before prices are read"
         );
     }
@@ -381,20 +437,18 @@ mod tests {
         let (mut colored, mut plain, mut err) = (Vec::new(), Vec::new(), Vec::new());
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::On,
-            no_download,
             &mut colored,
             &mut err,
         )
         .unwrap();
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             at(),
             Colors::Off,
-            no_download,
             &mut plain,
             &mut err,
         )
@@ -415,10 +469,9 @@ mod tests {
         assert!(
             run(
                 &home,
-                Mode::Offline,
+                SourceRefresh::offline(),
                 at(),
                 Colors::Off,
-                no_download,
                 &mut out,
                 &mut err
             )
@@ -435,10 +488,9 @@ mod tests {
         assert!(
             run(
                 &home,
-                Mode::Offline,
+                SourceRefresh::offline(),
                 at(),
                 Colors::Off,
-                no_download,
                 &mut out,
                 &mut err
             )
@@ -450,11 +502,10 @@ mod tests {
     #[test]
     fn the_saved_check_time_is_not_touched_by_an_offline_run() {
         let home = ScratchDir::new("app-offline-keeps");
-        let prices_dir = home.join(".local/share/droid-usage/prices");
-        let multipliers_dir = home.join(".local/share/droid-usage/multipliers");
+        let dirs = SnapshotDirs::under(&home);
         apply(
-            &prices_dir,
-            &multipliers_dir,
+            &dirs.prices,
+            &dirs.multipliers,
             at(),
             SAMPLE_TABLE,
             SAMPLE_PAGE,
@@ -465,17 +516,16 @@ mod tests {
         let later = at() + chrono::TimeDelta::days(3);
         run(
             &home,
-            Mode::Offline,
+            SourceRefresh::offline(),
             later,
             Colors::Off,
-            no_download,
             &mut out,
             &mut err,
         )
         .unwrap();
 
         assert_eq!(
-            prices::last_checked(&prices_dir),
+            last_checked(&dirs.prices),
             Some(at()),
             "an offline run does not change the recorded price check time"
         );

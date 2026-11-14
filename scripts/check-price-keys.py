@@ -8,7 +8,6 @@ snapshot does not exist.
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -17,13 +16,19 @@ DATA = Path.home() / ".local" / "share" / "droid-usage"
 
 
 def list_keys() -> list[tuple[str, str]]:
-    source = (ROOT / "src" / "multipliers.rs").read_text(encoding="utf-8")
-    block = re.search(r"const LIST_KEYS: &\[\(&str, &str\)\] = &\[(.*?)\n\];", source, re.S)
-    if block is None:
-        sys.exit("LIST_KEYS not found in src/multipliers.rs")
-    pairs = re.findall(r'\("([^"]+)",\s*"([^"]+)"\)', block.group(1))
+    tsv = ROOT / "src" / "droid-list-keys.tsv"
+    if not tsv.is_file():
+        sys.exit(f"{tsv} not found")
+    pairs = []
+    for line in tsv.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2:
+            sys.exit(f"malformed line in {tsv}: {line!r}")
+        pairs.append((parts[0], parts[1]))
     if not pairs:
-        sys.exit("LIST_KEYS has no pairs in src/multipliers.rs")
+        sys.exit(f"{tsv} has no pairs")
     return pairs
 
 

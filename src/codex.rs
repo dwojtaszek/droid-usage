@@ -2,11 +2,13 @@
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::model::{Read, Session, Source, Tokens, files_with_suffix, parse_timestamp};
+use crate::files::{LineError, files_with_suffix, for_each_json_line};
+use crate::model::{Read, Session, Source, Tokens, parse_timestamp};
 
 /// Reads active and archived Codex sessions under the given Codex home directory.
 /// Missing session directories are normal when Codex has not been used.
@@ -42,11 +44,7 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
 pub fn parse_transcript(reader: impl BufRead) -> Option<Session> {
     let (mut started, mut project, mut model) = (None, None, None);
     let mut tokens = Tokens::default();
-    for line in reader.lines() {
-        let line = line.ok()?;
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+    let completed = for_each_json_line(reader, LineError::Abort, |value| {
         let payload = &value["payload"];
         match value["type"].as_str() {
             Some("session_meta") if started.is_none() => {
@@ -71,8 +69,9 @@ pub fn parse_transcript(reader: impl BufRead) -> Option<Session> {
             }
             _ => {}
         }
-    }
-    Some(Session {
+        ControlFlow::Continue(())
+    });
+    completed.then_some(Session {
         source: Source::Codex,
         started: started?,
         project,

@@ -6,12 +6,16 @@ pub mod cli;
 pub mod codex;
 pub mod download;
 pub mod droid;
+pub mod files;
 pub mod model;
 pub mod multipliers;
 pub mod opencode;
 pub mod pi;
 pub mod prices;
+pub mod pricing;
 pub mod refresh;
 pub mod report;
+pub mod snapshots;
+pub mod summary;
 #[cfg(test)]
 pub mod testing;

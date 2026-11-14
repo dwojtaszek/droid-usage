@@ -5,24 +5,18 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::fs;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
 
-use crate::model::{Session, Source, Tokens, count_f64, parse_timestamp};
+use crate::model::{Tokens, count_f64, parse_timestamp};
+use crate::snapshots::{Loaded, Refresh, read_book, save_if_changed, snapshot_in_effect};
 
 /// The price table this module reads.
 pub const SOURCE_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-
-/// How long a check stays fresh before the report downloads the table again.
-const MAX_AGE_HOURS: i64 = 24;
-
-/// File that records when the table was last checked, kept beside the snapshots.
-const CHECKED_FILE: &str = "last-checked";
 
 /// USD per token for each kind of token.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -185,10 +179,32 @@ impl Snapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct IndexedSnapshot {
+    snapshot: Snapshot,
+    // First `provider/<name>` rate in BTreeMap key order, precomputed once per snapshot so lookups stay O(log N).
+    bare_rates: BTreeMap<String, Rate>,
+}
+
+impl IndexedSnapshot {
+    fn new(snapshot: Snapshot) -> Self {
+        let mut bare_rates = BTreeMap::new();
+        for (key, rate) in &snapshot.rates {
+            if let Some((_, name)) = key.split_once('/') {
+                let _ = bare_rates.entry(name.to_owned()).or_insert(*rate);
+            }
+        }
+        Self {
+            snapshot,
+            bare_rates,
+        }
+    }
+}
+
 /// All saved snapshots, oldest first.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct PriceBook {
-    snapshots: Vec<Snapshot>,
+    snapshots: Vec<IndexedSnapshot>,
 }
 
 impl PriceBook {
@@ -196,7 +212,9 @@ impl PriceBook {
     #[must_use]
     pub fn new(mut snapshots: Vec<Snapshot>) -> Self {
         snapshots.sort_by_key(|snapshot| snapshot.fetched);
-        Self { snapshots }
+        Self {
+            snapshots: snapshots.into_iter().map(IndexedSnapshot::new).collect(),
+        }
     }
 
     /// True when no snapshot is saved.
@@ -208,30 +226,21 @@ impl PriceBook {
     /// The rate for `model` at time `at`. Uses the snapshot in effect at `at`, or the earliest snapshot when `at` comes before all of them.
     #[must_use]
     pub fn rate_at(&self, model: &str, at: DateTime<Utc>) -> Option<Rate> {
-        let snapshot = snapshot_in_effect(&self.snapshots, at, |snapshot| snapshot.fetched)?;
-        lookup(&snapshot.rates, model).copied()
+        let entry = snapshot_in_effect(&self.snapshots, at, |item| item.snapshot.fetched)?;
+        entry
+            .snapshot
+            .rates
+            .get(model)
+            .or_else(|| entry.bare_rates.get(model))
+            .copied()
     }
 
     /// The rate under exactly the key `key` at time `at`. Unlike `rate_at`, it never falls back to another provider's key.
     #[must_use]
     pub fn exact_rate_at(&self, key: &str, at: DateTime<Utc>) -> Option<Rate> {
-        let snapshot = snapshot_in_effect(&self.snapshots, at, |snapshot| snapshot.fetched)?;
-        snapshot.rates.get(key).copied()
+        let entry = snapshot_in_effect(&self.snapshots, at, |item| item.snapshot.fetched)?;
+        entry.snapshot.rates.get(key).copied()
     }
-
-    fn newest_rates(&self) -> Option<&BTreeMap<String, Rate>> {
-        self.snapshots.last().map(|snapshot| &snapshot.rates)
-    }
-}
-
-/// The rate for a model name: the exact key, else the first `provider/<name>` key in name order. Several providers list the same model at different prices, so the choice of provider is a shortcut. Regional keys such as `azure/us/<name>` are not matched.
-fn lookup<'a>(rates: &'a BTreeMap<String, Rate>, model: &str) -> Option<&'a Rate> {
-    rates.get(model).or_else(|| {
-        rates
-            .iter()
-            .find(|(key, _)| key.split_once('/').is_some_and(|(_, name)| name == model))
-            .map(|(_, rate)| rate)
-    })
 }
 
 /// Estimated USD cost of `tokens` at `rate`.
@@ -243,123 +252,13 @@ pub fn cost_usd(tokens: &Tokens, rate: &Rate) -> f64 {
         + count_f64(tokens.cache_write) * rate.cache_write
 }
 
-/// Fills in `cost_usd` for sessions that have no recorded cost and a model the book prices. Sessions with a recorded cost keep it. Droid sessions are left out: they are priced by `multipliers::price_droid_sessions`.
-pub fn price_sessions(sessions: &mut [Session], book: &PriceBook) {
-    for session in sessions
-        .iter_mut()
-        .filter(|session| session.cost_usd.is_none() && session.source != Source::Droid)
-    {
-        let Some(model) = session.model.as_deref() else {
-            continue;
-        };
-        if let Some(rate) = book.rate_at(model, session.started) {
-            session.cost_usd = Some(cost_usd(&session.tokens, &rate));
-        }
-    }
-}
-
-/// A book read from a snapshot folder, plus the names of the `.json` files that could not be used.
-#[derive(Debug)]
-pub struct Loaded<B> {
-    /// The book built from every usable snapshot.
-    pub book: B,
-    /// File names of `.json` files that could not be read or parsed. They were ignored.
-    pub skipped: Vec<String>,
-}
-
 /// Reads every snapshot in `dir`, and names the `.json` files it had to skip. A missing folder is an empty book. Files that are not `.json` are ignored without a name.
 ///
 /// # Errors
 ///
 /// Returns an error when `dir` exists but cannot be read.
 pub fn read(dir: &Path) -> io::Result<Loaded<PriceBook>> {
-    let (snapshots, skipped) = read_snapshots(dir, Snapshot::from_json)?;
-    Ok(Loaded {
-        book: PriceBook::new(snapshots),
-        skipped,
-    })
-}
-
-/// Reads every snapshot in `dir`. A missing folder is an empty book. Files that are not snapshots are ignored.
-///
-/// # Errors
-///
-/// Returns an error when `dir` exists but cannot be read.
-pub fn load(dir: &Path) -> io::Result<PriceBook> {
-    read(dir).map(|loaded| loaded.book)
-}
-
-/// Reads every JSON file in `dir` that `parse` accepts, and returns the names of those it skipped. A missing folder holds none.
-///
-/// # Errors
-///
-/// Returns an error when `dir` exists but cannot be read.
-pub(crate) fn read_snapshots<T>(
-    dir: &Path,
-    parse: impl Fn(&Value) -> Option<T>,
-) -> io::Result<(Vec<T>, Vec<String>)> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
-        Err(err) => return Err(err),
-    };
-    let mut snapshots = Vec::new();
-    let mut skipped = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-        let parsed = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|value| parse(&value));
-        match parsed {
-            Some(snapshot) => snapshots.push(snapshot),
-            None => skipped.push(
-                path.file_name()
-                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-            ),
-        }
-    }
-    skipped.sort();
-    Ok((snapshots, skipped))
-}
-
-/// The snapshot in effect at `at`: the latest one fetched by then, or the earliest when `at` comes before all of them. `snapshots` must be sorted oldest first.
-pub(crate) fn snapshot_in_effect<S>(
-    snapshots: &[S],
-    at: DateTime<Utc>,
-    fetched: impl Fn(&S) -> DateTime<Utc>,
-) -> Option<&S> {
-    snapshots
-        .iter()
-        .rev()
-        .find(|&snapshot| fetched(snapshot) <= at)
-        .or_else(|| snapshots.first())
-}
-
-/// When the table was last checked, or `None` if it never was.
-#[must_use]
-pub fn last_checked(dir: &Path) -> Option<DateTime<Utc>> {
-    let text = fs::read_to_string(dir.join(CHECKED_FILE)).ok()?;
-    parse_timestamp(text.trim())
-}
-
-/// True when the table has not been checked within the last day.
-#[must_use]
-pub fn is_stale(dir: &Path, now: DateTime<Utc>) -> bool {
-    last_checked(dir)
-        .is_none_or(|checked| now.signed_duration_since(checked) > TimeDelta::hours(MAX_AGE_HOURS))
-}
-
-/// What a refresh did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Refresh {
-    /// Every rate matched the newest snapshot, so nothing was saved.
-    Unchanged,
-    /// At least one rate changed, so a new snapshot was saved.
-    Updated,
+    read_book(dir, Snapshot::from_json, PriceBook::new)
 }
 
 /// Saves `snapshot` in `dir` when any rate differs from the newest saved one. Nothing is written when they match.
@@ -368,75 +267,25 @@ pub enum Refresh {
 ///
 /// Returns an error when `dir` cannot be read or written.
 pub fn save(dir: &Path, snapshot: &Snapshot) -> io::Result<Refresh> {
-    if load(dir)?.newest_rates() == Some(&snapshot.rates) {
-        return Ok(Refresh::Unchanged);
-    }
-    write_snapshot(dir, snapshot.fetched, &snapshot.to_json())
-}
-
-/// Writes `json` into `dir` as a new snapshot named for `fetched`, creating `dir` first if needed. The snapshot appears in one step, so a crash never leaves a partial `.json` file for readers to parse.
-///
-/// # Errors
-///
-/// Returns an error when `dir` cannot be created or written.
-pub(crate) fn write_snapshot(
-    dir: &Path,
-    fetched: DateTime<Utc>,
-    json: &Value,
-) -> io::Result<Refresh> {
-    fs::create_dir_all(dir)?;
-    let name = snapshot_file_name(fetched);
-    // The temp name ends in `.tmp`, so `read_snapshots` never reads it.
-    let temp = dir.join(format!(".{name}.tmp"));
-    let result =
-        write_synced(&temp, &json.to_string()).and_then(|()| fs::rename(&temp, dir.join(&name)));
-    if result.is_err() {
-        // Best effort: a leftover temp file is ignored by readers.
-        let _ = fs::remove_file(&temp);
-    }
-    result?;
-    Ok(Refresh::Updated)
-}
-
-/// Writes `text` to `path` and flushes it to disk before returning.
-fn write_synced(path: &Path, text: &str) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
-    io::Write::write_all(&mut file, text.as_bytes())?;
-    file.sync_all()
-}
-
-/// Removes the snapshot that `write_snapshot` wrote for `fetched`.
-///
-/// # Errors
-///
-/// Returns an error when the snapshot cannot be removed.
-pub(crate) fn remove_snapshot(dir: &Path, fetched: DateTime<Utc>) -> io::Result<()> {
-    fs::remove_file(dir.join(snapshot_file_name(fetched)))
-}
-
-fn snapshot_file_name(fetched: DateTime<Utc>) -> String {
-    format!("{}.json", fetched.format("%Y%m%dT%H%M%SZ"))
-}
-
-/// Records `now` as the time the tables were last checked.
-///
-/// # Errors
-///
-/// Returns an error when `dir` cannot be written.
-pub fn record_check(dir: &Path, now: DateTime<Utc>) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    fs::write(
-        dir.join(CHECKED_FILE),
-        now.to_rfc3339_opts(SecondsFormat::Secs, true),
+    save_if_changed(
+        dir,
+        snapshot.fetched,
+        Snapshot::from_json,
+        |existing| existing.fetched,
+        |newest| newest.rates == snapshot.rates,
+        || snapshot.to_json(),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
+    use std::fs;
+
+    use chrono::{TimeDelta, TimeZone};
     use proptest::prelude::{prop_assert, proptest};
 
     use super::*;
+    use crate::snapshots::{is_stale, last_checked, record_check, write_snapshot};
     use crate::testing::{RECORDED_TABLE, ScratchDir};
 
     /// Saves a parsed table and records the check, as one refresh does.
@@ -466,17 +315,6 @@ mod tests {
                 .iter()
                 .map(|(name, input)| ((*name).to_owned(), rate(*input)))
                 .collect(),
-        }
-    }
-
-    fn session(model: Option<&str>, day: u32, tokens: Tokens) -> Session {
-        Session {
-            source: Source::Agy,
-            started: at(day),
-            project: None,
-            model: model.map(str::to_owned),
-            tokens,
-            cost_usd: None,
         }
     }
 
@@ -586,6 +424,7 @@ mod tests {
                 ("openai/gpt-x", 2.0),
                 ("azure/us/gpt-y", 3.0),
                 ("azure/gpt-y", 4.0),
+                ("vertex/gpt-y", 5.0),
             ],
         )]);
         assert_eq!(
@@ -673,43 +512,6 @@ mod tests {
     }
 
     #[test]
-    fn pricing_keeps_recorded_costs_and_skips_unknown_models() {
-        let book = PriceBook::new(vec![snapshot(10, &[("m", 1.0)])]);
-        let tokens = Tokens {
-            input: 1_000_000,
-            ..Tokens::default()
-        };
-        let mut sessions = [
-            session(Some("m"), 11, tokens),
-            session(Some("unknown"), 11, tokens),
-            session(None, 11, tokens),
-            Session {
-                cost_usd: Some(0.0),
-                ..session(Some("m"), 11, tokens)
-            },
-        ];
-        price_sessions(&mut sessions, &book);
-        // One million input tokens at $1 each.
-        assert!(
-            (sessions[0].cost_usd.unwrap() - 1_000_000.0).abs() < 1e-3,
-            "a session cost is its token count times the model rate"
-        );
-        assert_eq!(
-            sessions[1].cost_usd, None,
-            "a session whose model is not in the book has no cost"
-        );
-        assert_eq!(
-            sessions[2].cost_usd, None,
-            "a session with no model has no cost"
-        );
-        assert_eq!(
-            sessions[3].cost_usd,
-            Some(0.0),
-            "a recorded cost is kept even when the book has a rate"
-        );
-    }
-
-    #[test]
     fn snapshots_round_trip_through_json() {
         let original = snapshot(10, &[("m", 1.5e-6)]);
         let back = Snapshot::from_json(&original.to_json()).unwrap();
@@ -780,8 +582,9 @@ mod tests {
             "a refresh with an identical table reports no change"
         );
         assert_eq!(
-            load(&dir)
+            read(&dir)
                 .unwrap()
+                .book
                 .rate_at("openai/gpt-x", at(12))
                 .unwrap()
                 .input,
@@ -795,7 +598,7 @@ mod tests {
             Refresh::Updated,
             "a refresh with a changed rate reports an update"
         );
-        let book = load(&dir).unwrap();
+        let book = read(&dir).unwrap().book;
         assert_eq!(
             book.rate_at("openai/gpt-x", at(11)).unwrap().input,
             2e-6,
@@ -856,7 +659,9 @@ mod tests {
 
     #[test]
     fn missing_folder_is_an_empty_book() {
-        let book = load(Path::new("/nonexistent-droid-usage-prices")).unwrap();
+        let book = read(Path::new("/nonexistent-droid-usage-prices"))
+            .unwrap()
+            .book;
         assert!(
             book.is_empty(),
             "a missing snapshot folder loads as an empty book"
@@ -919,7 +724,7 @@ mod tests {
         let path = ScratchDir::new("prices-file-not-dir");
         fs::write(&path, "not a folder").unwrap();
         assert!(
-            load(&path).is_err(),
+            read(&path).is_err(),
             "a snapshot path that is a file rather than a folder fails to load"
         );
     }

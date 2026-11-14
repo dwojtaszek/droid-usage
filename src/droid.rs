@@ -2,12 +2,14 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::model::{Read, Session, Source, Tokens, files_with_suffix, parse_timestamp};
+use crate::files::{LineError, files_with_suffix, for_each_json_line};
+use crate::model::{Read, Session, Source, Tokens, parse_timestamp};
 
 /// Reads every Droid session under `root`. Each session is a `<id>.settings.json` (usage) next to `<id>.jsonl` (project and start time).
 ///
@@ -65,22 +67,21 @@ pub fn parse_settings(text: &str) -> Option<(Tokens, Option<String>)> {
 /// Project directory and start time from a session transcript. Stops reading once both are known.
 pub fn parse_header(reader: impl BufRead) -> Option<(Option<String>, DateTime<Utc>)> {
     let mut project = None;
-    for line in reader.lines() {
-        // A line that is not valid UTF-8 or JSON is skipped, not fatal.
-        let Ok(line) = line else { continue };
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+    let mut started = None;
+    // A line that is not valid UTF-8 or JSON is skipped, not fatal.
+    let _ = for_each_json_line(reader, LineError::Skip, |value| {
         if value["type"] == "session_start" && project.is_none() {
             project = value["cwd"].as_str().map(str::to_owned);
         }
         if value["type"] == "message"
-            && let Some(started) = value["timestamp"].as_str().and_then(parse_timestamp)
+            && let Some(time) = value["timestamp"].as_str().and_then(parse_timestamp)
         {
-            return Some((project, started));
+            started = Some(time);
+            return ControlFlow::Break(());
         }
-    }
-    None
+        ControlFlow::Continue(())
+    });
+    started.map(|started| (project, started))
 }
 
 #[cfg(test)]

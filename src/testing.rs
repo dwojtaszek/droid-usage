@@ -1,11 +1,8 @@
 //! Test-only helpers shared by the unit tests: scratch folders and fixtures.
 
-use std::error::Error;
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-
-use crate::download::Downloads;
 
 /// A scratch path for one test. It is cleared when made and removed again on drop, so a failed test leaves nothing behind.
 #[derive(Debug)]
@@ -55,8 +52,3 @@ pub(crate) const SAMPLE_TABLE: &str = r#"{"gpt-5.6-sol": {"mode": "chat", "input
 pub(crate) const SAMPLE_PAGE: &str = "| GPT-5.6 Sol<sup>†</sup> | `gpt-5.6-sol` | 1.6× | `none` |
 
 <sup>†</sup> Promotional pricing. GPT-5.6 Sol bills at 1.6× through November 22, 2026, then returns to 2×.";
-
-/// A download hook for tests where no download should happen.
-pub(crate) fn no_download() -> Result<Downloads, Box<dyn Error>> {
-    Err("download should not run".into())
-}

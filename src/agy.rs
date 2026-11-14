@@ -2,12 +2,13 @@
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, ErrorKind};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::Value;
 
+use crate::files::{LineError, for_each_json_line};
 use crate::model::{Read, Session, Source, Tokens, parse_timestamp};
 
 /// Model name prefixes to look for inside agy's binary metadata.
@@ -41,14 +42,13 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
             continue;
         };
         let db = root.join("conversations").join(format!("{id}.db"));
-        let model = match model_from_db(&db) {
-            Ok(model) => model,
-            // A conversation with no database has no model to read. Any other failure is counted.
-            Err(_) if matches!(db.try_exists(), Ok(false)) => None,
-            Err(_) => {
-                read.models_unreadable += 1;
-                None
-            }
+        let model = if matches!(db.try_exists(), Ok(false)) {
+            None
+        } else if let Ok(model) = model_from_db(&db) {
+            model
+        } else {
+            read.models_unreadable += 1;
+            None
         };
         read.sessions.push(Session {
             source: Source::Agy,
@@ -66,11 +66,7 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
 pub fn parse_transcript(reader: impl BufRead) -> Option<(DateTime<Utc>, Tokens)> {
     let mut started: Option<DateTime<Utc>> = None;
     let mut tokens = Tokens::default();
-    for line in reader.lines() {
-        let Ok(line) = line else { continue };
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+    let _ = for_each_json_line(reader, LineError::Skip, |value| {
         if let Some(at) = value["created_at"].as_str().and_then(parse_timestamp) {
             started = Some(started.map_or(at, |first| first.min(at)));
         }
@@ -80,7 +76,8 @@ pub fn parse_transcript(reader: impl BufRead) -> Option<(DateTime<Utc>, Tokens)>
             cache_read: value["cache_read_tokens"].as_u64().unwrap_or(0),
             cache_write: 0,
         });
-    }
+        ControlFlow::Continue(())
+    });
     started.map(|started| (started, tokens))
 }
 

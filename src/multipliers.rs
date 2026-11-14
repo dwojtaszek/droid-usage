@@ -11,61 +11,20 @@ use std::path::Path;
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
 
-use crate::model::{Session, Source, parse_timestamp};
-use crate::prices::{
-    Loaded, PriceBook, Refresh, cost_usd, read_snapshots, snapshot_in_effect, write_snapshot,
-};
+use crate::model::parse_timestamp;
+use crate::snapshots::{Loaded, Refresh, read_book, save_if_changed, snapshot_in_effect};
 
 /// The models page this module reads.
 pub const SOURCE_URL: &str = "https://docs.factory.com/models.md";
 
-/// The `LiteLLM` key holding each Droid model's first-party list price. A model not listed here is unpriced, because a third-party host's price is not Droid's basis.
-const LIST_KEYS: &[(&str, &str)] = &[
-    ("claude-fable-5", "claude-fable-5"),
-    ("claude-opus-5-5", "claude-opus-5-5"),
-    ("claude-opus-5", "claude-opus-5"),
-    ("claude-opus-4-8", "claude-opus-4-8"),
-    ("claude-opus-4-7", "claude-opus-4-7"),
-    ("claude-opus-4-6", "claude-opus-4-6"),
-    ("claude-opus-4-5-20251101", "claude-opus-4-5-20251101"),
-    ("claude-sonnet-5-5", "claude-sonnet-5-5"),
-    ("claude-sonnet-5", "claude-sonnet-5"),
-    ("claude-sonnet-4-6", "claude-sonnet-4-6"),
-    ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"),
-    ("claude-haiku-5-5", "claude-haiku-5-5"),
-    ("claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"),
-    ("gpt-6.1-sol", "gpt-6.1-sol"),
-    ("gpt-6-astra", "gpt-6-astra"),
-    ("gpt-6-sol", "gpt-6-sol"),
-    ("gpt-6-luna", "gpt-6-luna"),
-    ("gpt-5.6-sol", "gpt-5.6-sol"),
-    ("gpt-5.6-terra", "gpt-5.6-terra"),
-    ("gpt-5.6-luna", "gpt-5.6-luna"),
-    ("gpt-5.5", "gpt-5.5"),
-    ("gpt-5.5-pro", "gpt-5.5-pro"),
-    ("gpt-5.4", "gpt-5.4"),
-    ("gpt-5.4-mini", "gpt-5.4-mini"),
-    ("gpt-5.3-codex", "gpt-5.3-codex"),
-    ("gpt-5.2", "gpt-5.2"),
-    ("gemini-3.1-pro-preview", "gemini/gemini-3.1-pro-preview"),
-    ("gemini-3.8-flash", "gemini/gemini-3.8-flash"),
-    ("gemini-3.7-flash", "gemini/gemini-3.7-flash"),
-    ("gemini-3.6-flash", "gemini/gemini-3.6-flash"),
-    ("gemini-3.5-flash", "gemini/gemini-3.5-flash"),
-    ("gemini-3-flash-preview", "gemini/gemini-3-flash-preview"),
-    ("grok-4.7", "xai/grok-4.7"),
-    ("grok-4.6", "xai/grok-4.6"),
-    ("grok-4.5", "xai/grok-4.5"),
-    ("mistral-large-4", "mistral/mistral-large-4"),
-    ("mistral-medium-3.5", "mistral/mistral-medium-3.5"),
-    ("glm-5.3-flash", "zai/glm-5.3-flash"),
-    ("glm-5.3", "zai/glm-5.3"),
-    ("glm-5.2", "zai/glm-5.2"),
-    ("glm-5.1", "zai/glm-5.1"),
-    ("kimi-k3", "moonshot/kimi-k3"),
-    ("kimi-k2.5", "moonshot/kimi-k2.5"),
-    ("deepseek-v4-pro", "deepseek/deepseek-v4-pro"),
-];
+/// The `LiteLLM` key holding each Droid model's first-party list price (`droid_id<TAB>litellm_key`). A model not listed here is unpriced, because a third-party host's price is not Droid's basis.
+const LIST_KEYS_TSV: &str = include_str!("droid-list-keys.tsv");
+
+fn list_keys() -> impl Iterator<Item = (&'static str, &'static str)> {
+    LIST_KEYS_TSV
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+}
 
 /// A promotion that ends on a day. Sessions that start on or before `through` (UTC) pay the main multiplier. Later ones pay `after`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -314,48 +273,16 @@ impl MultiplierBook {
             .get(model)
             .map(|multiplier| multiplier.on(at.date_naive()))
     }
-
-    fn newest(&self) -> Option<&BTreeMap<String, Multiplier>> {
-        self.snapshots.last().map(|snapshot| &snapshot.models)
-    }
-}
-
-/// Prices Droid sessions at the model's first-party list price times its multiplier, both as of the session's start. A session whose model has no list price here, or no multiplier, is left unpriced.
-pub fn price_droid_sessions(
-    sessions: &mut [Session],
-    prices: &PriceBook,
-    multipliers: &MultiplierBook,
-) {
-    for session in sessions
-        .iter_mut()
-        .filter(|session| session.source == Source::Droid)
-    {
-        let Some(model) = session.model.as_deref() else {
-            continue;
-        };
-        let (Some(key), Some(multiplier)) = (
-            list_key(model),
-            multipliers.multiplier_at(model, session.started),
-        ) else {
-            continue;
-        };
-        let Some(rate) = prices.exact_rate_at(key, session.started) else {
-            continue;
-        };
-        session.cost_usd = Some(cost_usd(&session.tokens, &rate) * multiplier);
-    }
 }
 
 /// The `LiteLLM` key for a Droid model's list price. A fast variant uses its base model's price, since its multiplier carries the premium.
-fn list_key(model: &str) -> Option<&'static str> {
+#[must_use]
+pub(crate) fn list_key(model: &str) -> Option<&'static str> {
     let base = model
         .strip_suffix("-ultrafast")
         .or_else(|| model.strip_suffix("-fast"))
         .unwrap_or(model);
-    LIST_KEYS
-        .iter()
-        .find(|(id, _)| *id == base)
-        .map(|(_, key)| *key)
+    list_keys().find(|(id, _)| *id == base).map(|(_, key)| key)
 }
 
 /// Reads every snapshot in `dir`, and names the `.json` files it had to skip. A missing folder is an empty book.
@@ -364,20 +291,7 @@ fn list_key(model: &str) -> Option<&'static str> {
 ///
 /// Returns an error when `dir` exists but cannot be read.
 pub fn read(dir: &Path) -> io::Result<Loaded<MultiplierBook>> {
-    let (snapshots, skipped) = read_snapshots(dir, Snapshot::from_json)?;
-    Ok(Loaded {
-        book: MultiplierBook::new(snapshots),
-        skipped,
-    })
-}
-
-/// Reads every snapshot in `dir`. A missing folder is an empty book.
-///
-/// # Errors
-///
-/// Returns an error when `dir` exists but cannot be read.
-pub fn load(dir: &Path) -> io::Result<MultiplierBook> {
-    read(dir).map(|loaded| loaded.book)
+    read_book(dir, Snapshot::from_json, MultiplierBook::new)
 }
 
 /// Saves `snapshot` in `dir` when any multiplier differs from the newest saved one. Nothing is written when they match.
@@ -386,10 +300,14 @@ pub fn load(dir: &Path) -> io::Result<MultiplierBook> {
 ///
 /// Returns an error when `dir` cannot be read or written.
 pub fn save(dir: &Path, snapshot: &Snapshot) -> io::Result<Refresh> {
-    if load(dir)?.newest() == Some(&snapshot.models) {
-        return Ok(Refresh::Unchanged);
-    }
-    write_snapshot(dir, snapshot.fetched, &snapshot.to_json())
+    save_if_changed(
+        dir,
+        snapshot.fetched,
+        Snapshot::from_json,
+        |existing| existing.fetched,
+        |newest| newest.models == snapshot.models,
+        || snapshot.to_json(),
+    )
 }
 
 #[cfg(test)]
@@ -401,8 +319,7 @@ mod tests {
     use proptest::prelude::{prop, prop_assert, prop_assert_eq, proptest};
 
     use super::*;
-    use crate::model::Tokens;
-    use crate::prices::{Rate, Snapshot as PriceSnapshot};
+    use crate::prices::PriceBook;
     use crate::testing::{RECORDED_TABLE, ScratchDir};
 
     const PAGE: &str = "\
@@ -424,39 +341,6 @@ mod tests {
 
     fn page_snapshot(fetched: DateTime<Utc>) -> Snapshot {
         parse_page(PAGE, fetched).unwrap()
-    }
-
-    fn list_book(day: DateTime<Utc>, models: &[(&str, f64)]) -> PriceBook {
-        let rates = models
-            .iter()
-            .map(|(key, input)| {
-                let rate = Rate {
-                    input: *input,
-                    output: 0.0,
-                    cache_read: 0.0,
-                    cache_write: 0.0,
-                };
-                ((*key).to_owned(), rate)
-            })
-            .collect::<BTreeMap<_, _>>();
-        PriceBook::new(vec![PriceSnapshot {
-            fetched: day,
-            rates,
-        }])
-    }
-
-    fn droid(model: &str, started: DateTime<Utc>) -> Session {
-        Session {
-            source: Source::Droid,
-            started,
-            project: None,
-            model: Some(model.to_owned()),
-            tokens: Tokens {
-                input: 1_000_000,
-                ..Tokens::default()
-            },
-            cost_usd: None,
-        }
     }
 
     #[test]
@@ -620,61 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn droid_sessions_cost_list_price_times_multiplier() {
-        let prices = list_book(at(10, 1, 0), &[("gpt-5.6-sol", 2e-6)]);
-        let multipliers = MultiplierBook::new(vec![page_snapshot(at(10, 1, 0))]);
-        let mut sessions = [
-            droid("gpt-5.6-sol", at(10, 2, 0)),
-            droid("gpt-5.6-sol-fast", at(10, 2, 0)),
-            droid("gpt-5.6-sol", at(11, 25, 0)),
-        ];
-        price_droid_sessions(&mut sessions, &prices, &multipliers);
-        // One million input tokens at $2e-6 each, times the multiplier in effect.
-        assert!(
-            (sessions[0].cost_usd.unwrap() - 2.0 * 1.6).abs() < 1e-9,
-            "the first session costs list price times the multiplier in effect"
-        );
-        assert!(
-            (sessions[1].cost_usd.unwrap() - 2.0 * 3.2).abs() < 1e-9,
-            "a fast-variant session is billed at its own multiplier"
-        );
-        assert!(
-            (sessions[2].cost_usd.unwrap() - 2.0 * 2.0).abs() < 1e-9,
-            "a session after the promotion ends is billed at the regular rate"
-        );
-    }
-
-    #[test]
-    fn droid_sessions_without_a_list_price_or_multiplier_stay_unpriced() {
-        // Only a third-party key is present, so the first-party lookup must not match it.
-        let prices = list_book(at(10, 1, 0), &[("azure/gpt-5.6-sol", 2e-6)]);
-        let multipliers = MultiplierBook::new(vec![page_snapshot(at(10, 1, 0))]);
-        let mut sessions = [
-            droid("gpt-5.6-sol", at(10, 2, 0)),
-            droid("glm-5.2", at(10, 2, 0)),
-            droid("gemini-4-argon", at(10, 2, 0)),
-        ];
-        price_droid_sessions(&mut sessions, &prices, &multipliers);
-        assert!(
-            sessions.iter().all(|session| session.cost_usd.is_none()),
-            "no session is priced without a first-party list price and multiplier"
-        );
-    }
-
-    #[test]
-    fn other_sources_are_left_alone() {
-        let prices = list_book(at(10, 1, 0), &[("gpt-5.6-sol", 2e-6)]);
-        let multipliers = MultiplierBook::new(vec![page_snapshot(at(10, 1, 0))]);
-        let mut session = droid("gpt-5.6-sol", at(10, 2, 0));
-        session.source = Source::Agy;
-        price_droid_sessions(std::slice::from_mut(&mut session), &prices, &multipliers);
-        assert_eq!(
-            session.cost_usd, None,
-            "a session from another source keeps no cost"
-        );
-    }
-
-    #[test]
     fn list_keys_strip_fast_suffixes_only() {
         assert_eq!(
             list_key("gpt-6.1-sol-ultrafast"),
@@ -709,16 +538,16 @@ mod tests {
         ]);
         let page = parse_page(RECORDED_PAGE, when).unwrap();
         let mut ids = BTreeSet::new();
-        for (id, key) in LIST_KEYS {
+        for (id, key) in list_keys() {
             // `list_key` returns the first match, so a repeated ID would hide its second entry.
-            assert!(ids.insert(*id), "{id} is listed twice");
+            assert!(ids.insert(id), "{id} is listed twice");
             assert_eq!(
                 list_key(id),
-                Some(*key),
+                Some(key),
                 "{id} maps to its expected list key"
             );
             assert!(
-                page.models.contains_key(*id),
+                page.models.contains_key(id),
                 "{id} is not on the models page"
             );
             assert!(
@@ -726,6 +555,7 @@ mod tests {
                 "{key} is not in the price table"
             );
         }
+        assert_eq!(ids.len(), LIST_KEYS_TSV.lines().count());
     }
 
     #[test]
@@ -758,33 +588,6 @@ mod tests {
             snapshot.models["glm-5.2"].promo, None,
             "a model with no promotion on the page has none"
         );
-    }
-
-    #[test]
-    fn recorded_table_and_page_price_a_droid_session() {
-        let prices = PriceBook::new(vec![
-            crate::prices::parse_table(RECORDED_TABLE, at(10, 25, 4)).unwrap(),
-        ]);
-        let multipliers =
-            MultiplierBook::new(vec![parse_page(RECORDED_PAGE, at(10, 25, 4)).unwrap()]);
-        let mut session = Session {
-            source: Source::Droid,
-            started: at(10, 25, 9),
-            project: None,
-            model: Some("gpt-5.6-sol".to_owned()),
-            tokens: Tokens {
-                input: 1_000,
-                output: 500,
-                cache_read: 2_000,
-                cache_write: 0,
-            },
-            cost_usd: None,
-        };
-        price_droid_sessions(std::slice::from_mut(&mut session), &prices, &multipliers);
-
-        // List price: 1000 × $4e-6 + 500 × $2e-5 + 2000 × $4e-7 = $0.0148. Droid bills 1.6× that.
-        let cost = session.cost_usd.unwrap();
-        assert!((cost - 0.02368).abs() < 1e-12, "cost was {cost}");
     }
 
     #[test]
@@ -849,7 +652,7 @@ mod tests {
             Refresh::Updated,
             "a changed multiplier is saved as a new update"
         );
-        let book = load(&dir).unwrap();
+        let book = read(&dir).unwrap().book;
         assert!(
             !book.is_empty(),
             "a book loaded from saved snapshots is not empty"

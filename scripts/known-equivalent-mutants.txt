@@ -1,5 +1,5 @@
 # Mutants that cannot change behavior, so a missed one is not a test hole.
 # Each line is copied exactly from cargo-mutants output (mutants.out/missed.txt).
 # Both are `|` vs `^` between SQLite open flags. The flags are disjoint bits, so `|` and `^` agree.
-src/agy.rs:91:42: replace | with ^ in model_from_db
+src/agy.rs:88:42: replace | with ^ in model_from_db
 src/opencode.rs:20:42: replace | with ^ in read_sessions

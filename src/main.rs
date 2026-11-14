@@ -29,19 +29,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         app::NoColor::Unset
     };
+    let refresh = mode.with_download(|| {
+        download::fetch_both(
+            prices::SOURCE_URL,
+            multipliers::SOURCE_URL,
+            DOWNLOAD_TIMEOUT,
+        )
+        .map_err(Into::into)
+    });
     app::run(
         &home,
-        mode,
+        refresh,
         Utc::now(),
         app::use_color(stdout, no_color),
-        || {
-            download::fetch_both(
-                prices::SOURCE_URL,
-                multipliers::SOURCE_URL,
-                DOWNLOAD_TIMEOUT,
-            )
-            .map_err(Into::into)
-        },
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),
     )

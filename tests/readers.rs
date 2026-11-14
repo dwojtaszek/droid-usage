@@ -8,7 +8,7 @@ use std::path::Path;
 use chrono::{DateTime, TimeZone, Utc};
 use common::ScratchDir;
 use droid_usage::prices::{self, PriceBook};
-use droid_usage::{agy, droid, multipliers, opencode};
+use droid_usage::{agy, droid, multipliers, opencode, pricing};
 use rusqlite::{Connection, params};
 
 fn write(path: &Path, text: &str) {
@@ -279,10 +279,9 @@ fn droid_sessions_are_priced_with_the_snapshot_in_effect_when_they_started() {
     .unwrap();
 
     let mut sessions = droid::read_sessions(&root).unwrap().sessions;
-    let book: PriceBook = prices::load(&prices_dir).unwrap();
-    let multiplier_book = multipliers::load(&multipliers_dir).unwrap();
-    prices::price_sessions(&mut sessions, &book);
-    multipliers::price_droid_sessions(&mut sessions, &book, &multiplier_book);
+    let book: PriceBook = prices::read(&prices_dir).unwrap().book;
+    let multiplier_book = multipliers::read(&multipliers_dir).unwrap().book;
+    pricing::price_sessions(&mut sessions, &book, &multiplier_book);
 
     // 10 input at 1e-6, 5 output at 4e-6, 2 cache reads at 1e-7, 1 cache write at 1.25e-6, times the early multiplier of 2.
     let expected = (10.0 * 1e-6 + 5.0 * 4e-6 + 2.0 * 1e-7 + 1.25e-6) * 2.0;

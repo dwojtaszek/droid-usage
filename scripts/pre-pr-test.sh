@@ -46,7 +46,7 @@ run_step "docs" check_docs
 if grep -qxE 'Cargo\.toml|Cargo\.lock|deny\.toml' <<<"$changed"; then
     run_step "cargo deny" cargo deny check
 fi
-if grep -qxE 'src/(prices|multipliers)\.rs' <<<"$changed"; then
+if grep -qxE 'src/(prices|multipliers)\.rs|src/droid-list-keys\.tsv' <<<"$changed"; then
     run_step "price keys in newest snapshot" python3 scripts/check-price-keys.py
 fi
 if grep -qE '^src/.*\.rs$' <<<"$changed"; then

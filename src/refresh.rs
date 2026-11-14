@@ -8,6 +8,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use crate::download::Downloads;
+use crate::snapshots::{Refresh, is_stale, record_check, remove_snapshot};
 use crate::{multipliers, prices};
 
 /// The multiplier save failed, and the price snapshot saved before it could not be removed.
@@ -51,14 +52,14 @@ pub fn apply(
     let multipliers = multipliers::parse_page(page, now)?;
     let prices_saved = prices::save(prices_dir, &prices)?;
     if let Err(save) = multipliers::save(multipliers_dir, &multipliers) {
-        if prices_saved == prices::Refresh::Updated
-            && let Err(undo) = prices::remove_snapshot(prices_dir, now)
+        if prices_saved == Refresh::Updated
+            && let Err(undo) = remove_snapshot(prices_dir, now)
         {
             return Err(Box::new(UndoFailed { save, undo }));
         }
         return Err(save.into());
     }
-    prices::record_check(prices_dir, now)?;
+    record_check(prices_dir, now)?;
     Ok(())
 }
 
@@ -70,8 +71,9 @@ pub fn refresh_prices(
     download: impl FnOnce() -> Result<Downloads, Box<dyn Error>>,
 ) -> Option<String> {
     // A missing multiplier snapshot forces a download, so Droid costs start on the first run after an upgrade.
-    let have_multipliers = multipliers::load(multipliers_dir).is_ok_and(|book| !book.is_empty());
-    if have_multipliers && !prices::is_stale(prices_dir, now) {
+    let have_multipliers =
+        multipliers::read(multipliers_dir).is_ok_and(|loaded| !loaded.book.is_empty());
+    if have_multipliers && !is_stale(prices_dir, now) {
         return None;
     }
     download()
@@ -95,8 +97,8 @@ mod tests {
     use chrono::{TimeDelta, TimeZone};
 
     use super::*;
-    use crate::prices::last_checked;
-    use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir, no_download};
+    use crate::snapshots::last_checked;
+    use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir};
 
     fn at() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap()
@@ -137,15 +139,17 @@ mod tests {
         .unwrap();
 
         assert!(
-            prices::load(&prices_dir)
+            prices::read(&prices_dir)
                 .unwrap()
+                .book
                 .rate_at("gpt-5.6-sol", at())
                 .is_some(),
             "the saved price table has a rate for the model at the check time"
         );
         assert_eq!(
-            multipliers::load(&multipliers_dir)
+            multipliers::read(&multipliers_dir)
                 .unwrap()
+                .book
                 .multiplier_at("gpt-5.6-sol", at()),
             Some(1.6),
             "the saved multiplier table gives the promotional multiplier for the model"
@@ -171,11 +175,11 @@ mod tests {
         );
 
         assert!(
-            prices::load(&prices_dir).unwrap().is_empty(),
+            prices::read(&prices_dir).unwrap().book.is_empty(),
             "no price snapshot is written when the page is bad"
         );
         assert!(
-            multipliers::load(&multipliers_dir).unwrap().is_empty(),
+            multipliers::read(&multipliers_dir).unwrap().book.is_empty(),
             "no multiplier snapshot is written when the page is bad"
         );
         assert_eq!(
@@ -195,11 +199,11 @@ mod tests {
         );
 
         assert!(
-            prices::load(&prices_dir).unwrap().is_empty(),
+            prices::read(&prices_dir).unwrap().book.is_empty(),
             "no price snapshot is written when the table is bad"
         );
         assert!(
-            multipliers::load(&multipliers_dir).unwrap().is_empty(),
+            multipliers::read(&multipliers_dir).unwrap().book.is_empty(),
             "no multiplier snapshot is written when the table is bad"
         );
         assert_eq!(
@@ -228,7 +232,7 @@ mod tests {
             "a multiplier folder that cannot be read fails the refresh"
         );
         assert!(
-            prices::load(&prices_dir).unwrap().is_empty(),
+            prices::read(&prices_dir).unwrap().book.is_empty(),
             "the price snapshot written before the failure is removed again"
         );
         assert_eq!(
@@ -267,7 +271,7 @@ mod tests {
             "a multiplier folder that cannot be read fails the refresh"
         );
 
-        let book = prices::load(&prices_dir).unwrap();
+        let book = prices::read(&prices_dir).unwrap().book;
         assert_eq!(
             book.rate_at("gpt-5.6-sol", later),
             book.rate_at("gpt-5.6-sol", at()),
@@ -295,7 +299,9 @@ mod tests {
 
         let later = at() + TimeDelta::hours(23);
         assert_eq!(
-            refresh_prices(&prices_dir, &multipliers_dir, later, no_download),
+            refresh_prices(&prices_dir, &multipliers_dir, later, || Err(
+                "unexpected download".into()
+            )),
             None,
             "a check within a day with snapshots present does not download"
         );
@@ -364,8 +370,9 @@ mod tests {
             "a missing multiplier snapshot triggers a download with no warning"
         );
         assert_eq!(
-            multipliers::load(&multipliers_dir)
+            multipliers::read(&multipliers_dir)
                 .unwrap()
+                .book
                 .multiplier_at("gpt-5.6-sol", at()),
             Some(1.6),
             "the re-downloaded multiplier snapshot gives the promotional multiplier"

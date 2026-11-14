@@ -31,9 +31,10 @@ while IFS= read -r file; do
     case $file in
         src/main.rs) integration_tests+=(binary) ;;
         src/lib.rs | src/testing.rs | src/*/*) run_all=1 ;;
+        src/droid-list-keys.tsv) lib_filters+=(multipliers:: pricing::) ;;
         src/*.rs) lib_filters+=("$(basename "$file" .rs)::") ;;
-        tests/golden/*) integration_tests+=(golden) ;;
-        tests/common/*) integration_tests+=(binary golden readers) ;;
+        tests/golden/*) integration_tests+=(binary) ;;
+        tests/common/*) integration_tests+=(binary readers) ;;
         tests/*.rs) integration_tests+=("$(basename "$file" .rs)") ;;
         *.md | docs/* | evals/* | fuzz/* | scripts/* | .factory/* | .github/* | LICENSE | .gitignore) ;;
         *) run_all=1 ;;

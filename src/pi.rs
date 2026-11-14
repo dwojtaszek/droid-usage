@@ -2,11 +2,13 @@
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::model::{Read, Session, Source, Tokens, files_with_suffix, parse_timestamp};
+use crate::files::{LineError, files_at_depth, for_each_json_line};
+use crate::model::{Read, Session, Source, Tokens, parse_timestamp};
 
 /// Reads every Pi session under the given sessions directory.
 /// A missing session directory is normal when Pi has not been used.
@@ -15,7 +17,8 @@ use crate::model::{Read, Session, Source, Tokens, files_with_suffix, parse_times
 ///
 /// Returns an error when the session directory cannot be searched, except when it is missing.
 pub fn read_sessions(root: &Path) -> io::Result<Read> {
-    let found = match files_with_suffix(root, ".jsonl") {
+    // Pi stores sessions at `<root>/<project>/*.jsonl`; deeper folders hold subagent artifacts and child runs already counted in parent tool results.
+    let found = match files_at_depth(root, ".jsonl", 1) {
         Ok(found) => found,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Read::default()),
         Err(error) => return Err(error),
@@ -24,12 +27,7 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
         skipped: found.unreadable,
         ..Read::default()
     };
-    for path in found
-        .files
-        .into_iter()
-        // Pi stores sessions at `<root>/<project>/*.jsonl`; deeper folders hold subagent artifacts and child runs already counted in parent tool results.
-        .filter(|path| path.parent().and_then(Path::parent) == Some(root))
-    {
+    for path in found.files {
         match File::open(path)
             .ok()
             .and_then(|file| parse_transcript(BufReader::new(file)))
@@ -47,11 +45,7 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
 pub fn parse_transcript(reader: impl BufRead) -> Option<Session> {
     let (mut started, mut project, mut model, mut cost_usd) = (None, None, None, None);
     let mut tokens = Tokens::default();
-    for line in reader.lines() {
-        let line = line.ok()?;
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+    let completed = for_each_json_line(reader, LineError::Abort, |value| {
         match value["type"].as_str() {
             Some("session") if started.is_none() => {
                 started = value["timestamp"].as_str().and_then(parse_timestamp);
@@ -78,8 +72,9 @@ pub fn parse_transcript(reader: impl BufRead) -> Option<Session> {
             }
             _ => {}
         }
-    }
-    Some(Session {
+        ControlFlow::Continue(())
+    });
+    completed.then_some(Session {
         source: Source::Pi,
         started: started?,
         project,
