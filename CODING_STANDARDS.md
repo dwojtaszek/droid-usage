@@ -7,7 +7,7 @@ The scripts own mechanical checks. Reuse their recorded results when they cover 
 - Does the change fully meet the request across callers, configuration, fixtures, and documentation without adding unrequested flexibility?
 - Does it fit the surrounding application code and reuse existing patterns? Avoid library machinery unless a real caller needs it.
 - Does it preserve trust-boundary validation, error handling, existing user data, and unrelated working changes?
-- Do tests assert the behavior that could fail, including relevant boundary and error cases? Would a plausible incorrect implementation still pass?
+- Do tests assert the behavior that could fail, including relevant boundary and error cases? Would a plausible incorrect implementation still pass (such as multi-entry tie-breaking or newest-item selection)?
 - Are approximations and known limits accurate and visible where users make decisions? In usage readers, consider repeated events, cache accounting, model switches, and missing metadata.
 - Do verification results cover the final source revision? Are skipped checks, surviving mutants, and untested paths disclosed?
 

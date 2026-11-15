@@ -275,7 +275,7 @@ impl MultiplierBook {
     }
 }
 
-/// The `LiteLLM` key for a Droid model's list price. A fast variant uses its base model's price, since its multiplier carries the premium.
+/// The `LiteLLM` key for a Droid model's list price. A fast variant uses its base model's price, since its multiplier carries the premium (suffix stripping mirrored in `tests/golden/anonymize.py`).
 #[must_use]
 pub(crate) fn list_key(model: &str) -> Option<&'static str> {
     let base = model

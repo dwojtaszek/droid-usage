@@ -1,0 +1,42 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          components: rustfmt, clippy
+      # v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - name: Ensure shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
+      - name: Gate checks
+        run: |
+          set -euo pipefail
+          shellcheck scripts/*.sh
+          scripts/selftest-gates.sh
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          (
+            source scripts/common.sh
+            test_env cargo test --locked -q &&
+              check_test_count &&
+              check_docs
+          )

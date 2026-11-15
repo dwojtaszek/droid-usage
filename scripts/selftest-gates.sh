@@ -54,6 +54,10 @@ cargo() {
             echo "src/agy.rs:79:42: replace | with ^ in model_from_db" >mutants.out/missed.txt
             return 2
             ;;
+        known_missed_shifted)
+            echo "src/agy.rs:999:42: replace | with ^ in model_from_db" >mutants.out/missed.txt
+            return 2
+            ;;
         unknown_missed)
             echo "src/x.rs:1:1: r" >mutants.out/missed.txt
             return 2
@@ -76,6 +80,7 @@ expect_verdict all_unviable 1
 expect_verdict caught_and_unviable 0
 expect_verdict nothing_found 0
 expect_verdict known_missed 0
+expect_verdict known_missed_shifted 0
 expect_verdict unknown_missed 1
 expect_verdict timed_out 1
 expect_verdict stopped 1

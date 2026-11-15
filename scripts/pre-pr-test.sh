@@ -39,8 +39,8 @@ run_step "clean tree" check_clean_tree
 run_step "shellcheck" shellcheck scripts/*.sh
 run_step "gate self-test" scripts/selftest-gates.sh
 run_step "fmt" cargo fmt --check
-run_step "clippy" cargo clippy --all-targets --all-features -- -D warnings
-run_step "tests" test_env cargo test -q
+run_step "clippy" cargo clippy --locked --all-targets --all-features -- -D warnings
+run_step "tests" test_env cargo test --locked -q
 run_step "test count" check_test_count
 run_step "docs" check_docs
 if grep -qxE 'Cargo\.toml|Cargo\.lock|deny\.toml' <<<"$changed"; then

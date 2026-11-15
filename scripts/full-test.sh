@@ -28,8 +28,8 @@ echo "full-test: HEAD $(git rev-parse --short HEAD), $(git status --porcelain | 
 run_step "shellcheck" shellcheck scripts/*.sh
 run_step "gate self-test" scripts/selftest-gates.sh
 run_step "fmt" cargo fmt --check
-run_step "clippy" cargo clippy --all-targets --all-features -- -D warnings
-run_step "tests" test_env cargo test -q
+run_step "clippy" cargo clippy --locked --all-targets --all-features -- -D warnings
+run_step "tests" test_env cargo test --locked -q
 run_step "test count" check_test_count
 run_step "docs" check_docs
 run_step "cargo deny" cargo deny check
@@ -38,5 +38,6 @@ run_step "miri" miri
 run_step "mutants on the whole crate" run_mutants --timeout 180
 run_step "fuzz multipliers_page" fuzz_target multipliers_page
 run_step "fuzz prices_table" fuzz_target prices_table
-run_step "line coverage floor 92%" test_env cargo llvm-cov --summary-only --fail-under-lines 92
+run_step "line coverage clean" cargo llvm-cov clean --workspace
+run_step "line coverage floor 92%" test_env cargo llvm-cov --locked --summary-only --fail-under-lines 92
 finish

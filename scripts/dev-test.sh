@@ -52,19 +52,19 @@ if ((rust_changes == 0)); then
 fi
 
 run_step "fmt" cargo fmt --check
-run_step "clippy" cargo clippy --all-targets --all-features -- -D warnings
+run_step "clippy" cargo clippy --locked --all-targets --all-features -- -D warnings
 if ((run_all)); then
-    run_step "tests (all)" test_env cargo test
+    run_step "tests (all)" test_env cargo test --locked
 else
     if ((${#lib_filters[@]})); then
-        run_step "unit tests for ${lib_filters[*]}" test_env cargo test --lib -- "${lib_filters[@]}"
+        run_step "unit tests for ${lib_filters[*]}" test_env cargo test --locked --lib -- "${lib_filters[@]}"
     fi
     if ((${#integration_tests[@]})); then
         test_args=()
         while IFS= read -r target; do
             test_args+=(--test "$target")
         done < <(printf '%s\n' "${integration_tests[@]}" | sort -u)
-        run_step "integration tests" test_env cargo test "${test_args[@]}"
+        run_step "integration tests" test_env cargo test --locked "${test_args[@]}"
     fi
 fi
 run_step "test count" check_test_count

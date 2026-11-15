@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags};
 use crate::files::{LineError, for_each_json_line};
 use crate::model::{Read, Session, Source, Tokens, parse_timestamp};
 
-/// Model name prefixes to look for inside agy's binary metadata.
+/// Model name prefixes to look for inside agy's binary metadata (mirrored as `AGY_MODEL_PREFIXES` in `tests/golden/anonymize.py`).
 // shortcut: model names are found by prefix in a binary blob, so other providers show as unknown and a conversation that used several models reports only the first; upgrade when agy stores the model id as a plain field.
 const MODEL_PREFIXES: [&str; 3] = ["gemini-", "claude-", "gpt-"];
 

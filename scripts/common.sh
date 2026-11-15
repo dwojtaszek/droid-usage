@@ -94,20 +94,25 @@ check_clean_tree() {
 }
 
 check_docs() {
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
 }
 
 check_test_count() {
     local count
-    count=$(cargo test -q -- --list 2>/dev/null | grep -c ': test$')
+    count=$(cargo test --locked -q -- --list 2>/dev/null | grep -c ': test$')
     echo "tests listed: $count (floor: $MIN_TEST_COUNT)"
     ((count >= MIN_TEST_COUNT))
+}
+
+# normalize_mutant: strips `:line:col:` so line-number shifts do not invalidate known equivalents.
+normalize_mutant() {
+    sed -E 's/^([^:]+):[0-9]+:[0-9]+:/\1:/'
 }
 
 # check_missed_mutants: fails on a timed-out mutant, or on a missed mutant that is not a known equivalent.
 check_missed_mutants() {
     local status=0 line known
-    known=$(grep -v '^#' scripts/known-equivalent-mutants.txt)
+    known=$(grep -vE '^(#|$)' scripts/known-equivalent-mutants.txt | normalize_mutant)
     if [[ -s mutants.out/timeout.txt ]]; then
         echo "timed out:"
         cat mutants.out/timeout.txt
@@ -115,7 +120,7 @@ check_missed_mutants() {
     fi
     if [[ -s mutants.out/missed.txt ]]; then
         while IFS= read -r line; do
-            if grep -Fxq -- "$line" <<<"$known"; then
+            if grep -Fxq -- "$(normalize_mutant <<<"$line")" <<<"$known"; then
                 echo "known equivalent: $line"
             else
                 echo "MISSED: $line"
