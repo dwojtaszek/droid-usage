@@ -361,4 +361,45 @@ mod tests {
             "text that is not a timestamp does not parse"
         );
     }
+
+    use proptest::prelude::{prop, prop_assert_eq, proptest};
+
+    proptest! {
+        #[test]
+        fn any_printed_timestamp_round_trips_through_parse_timestamp(
+            // From year 0 to 2100, with independent seconds and nanoseconds, so
+            // fractional-second handling is covered; full chrono range ends are not needed.
+            secs in -62_167_219i64..4_102_444_800i64,
+            nanos in 0u32..1_000_000_000,
+        ) {
+            let time: DateTime<Utc> = DateTime::from_timestamp(secs, nanos).unwrap();
+            prop_assert_eq!(parse_timestamp(&time.to_rfc3339()), Some(time));
+        }
+
+        #[test]
+        fn retain_since_keeps_exactly_the_sessions_from_the_date_on(
+            starts in prop::collection::vec(-62_167_219_200_000i64..4_102_444_800_000, 0..40),
+            since_millis in -62_167_219_200_000i64..4_102_444_800_000,
+        ) {
+            let since = DateTime::from_timestamp_millis(since_millis)
+                .unwrap()
+                .date_naive();
+            // The oracle compares instants against UTC midnight, not the expression retain_since uses.
+            let since_start = since.and_hms_opt(0, 0, 0).unwrap().and_utc();
+            let mut sessions: Vec<Session> = starts
+                .iter()
+                .map(|millis| Session {
+                    started: DateTime::from_timestamp_millis(*millis).unwrap(),
+                    ..one_session()
+                })
+                .collect();
+            let kept: Vec<Session> = sessions
+                .iter()
+                .filter(|session| session.started >= since_start)
+                .cloned()
+                .collect();
+            retain_since(&mut sessions, since);
+            prop_assert_eq!(sessions, kept);
+        }
+    }
 }

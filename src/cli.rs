@@ -177,4 +177,56 @@ mod tests {
         let err = parse_args(["--offline", "--bogus"]).unwrap_err();
         assert!(err.to_string().contains("--bogus"), "{err}");
     }
+
+    use proptest::prelude::{prop_assert, prop_assert_eq, proptest};
+
+    proptest! {
+        #[test]
+        fn any_printed_date_round_trips_through_the_since_flag(
+            year in 0i32..=9999,
+            month in 1u32..=12,
+            day in 1u32..=31,
+        ) {
+            // Days that do not exist in that month are not dates; skip them.
+            let Some(date) = NaiveDate::from_ymd_opt(year, month, day) else {
+                return Ok(());
+            };
+            let text = date.format("%Y-%m-%d").to_string();
+            prop_assert_eq!(parse_since(&text), Ok(date));
+            prop_assert_eq!(
+                parse_args(["--since", text.as_str()]),
+                Ok(Args {
+                    mode: Mode::Online,
+                    since: Some(date),
+                }),
+                "the printed date reaches the parsed arguments unchanged"
+            );
+        }
+
+        #[test]
+        fn impossible_dates_are_rejected(
+            year in 0i32..=9999,
+            month in 1u32..=12,
+            day in 29u32..=31,
+        ) {
+            // Days that exist are covered by the round trip; skip them.
+            if NaiveDate::from_ymd_opt(year, month, day).is_some() {
+                return Ok(());
+            }
+            let text = format!("{year:04}-{month:02}-{day:02}");
+            prop_assert!(
+                parse_since(&text).is_err(),
+                "a date that does not exist must not parse: {text}"
+            );
+        }
+
+        #[test]
+        fn any_parsed_since_text_is_a_real_date(text in ".*") {
+            // Whatever text parse_since accepts must itself print and parse back.
+            if let Ok(date) = parse_since(&text) {
+                let printed = date.format("%Y-%m-%d").to_string();
+                prop_assert_eq!(parse_since(&printed), Ok(date));
+            }
+        }
+    }
 }
