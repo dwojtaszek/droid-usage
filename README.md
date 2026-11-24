@@ -18,6 +18,7 @@ The report shows totals by source, a weekly trend, cost and tokens per model, an
 cargo build --release
 target/release/droid-usage            # refreshes saved prices if they are over 24 hours old
 target/release/droid-usage --offline  # uses the saved prices only, no network
+target/release/droid-usage --since 2026-11-01  # counts only sessions started on or after that UTC date
 ```
 
 Saved price and multiplier snapshots live in `~/.local/share/droid-usage/`. A refresh downloads two public files and nothing else:

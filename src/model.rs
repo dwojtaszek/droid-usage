@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 /// Where a session was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,6 +130,11 @@ pub fn add_source<E: fmt::Display>(
         }
         Err(err) => Some(format!("{name}: {err}")),
     }
+}
+
+/// Keeps only the sessions that started on or after `since`, compared as UTC dates. A session at exactly UTC midnight of `since` is kept.
+pub fn retain_since(sessions: &mut Vec<Session>, since: NaiveDate) {
+    sessions.retain(|session| session.started.date_naive() >= since);
 }
 
 /// Parses an RFC 3339 timestamp into UTC. Returns `None` for any other text.
@@ -310,6 +315,37 @@ mod tests {
             sessions,
             Vec::<Session>::new(),
             "an unreadable source adds no sessions"
+        );
+    }
+
+    #[test]
+    fn retain_since_keeps_sessions_from_the_date_on() {
+        let mut session = one_session();
+        session.started = parse_timestamp("2026-10-24T23:59:59Z").unwrap();
+        let mut at_midnight = one_session();
+        at_midnight.started = parse_timestamp("2026-10-25T00:00:00Z").unwrap();
+        let mut after = one_session();
+        after.started = parse_timestamp("2026-10-25T12:00:00+02:00").unwrap();
+        let mut sessions = vec![session, at_midnight, after];
+
+        retain_since(
+            &mut sessions,
+            NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+        );
+
+        assert_eq!(
+            sessions,
+            vec![
+                Session {
+                    started: parse_timestamp("2026-10-25T00:00:00Z").unwrap(),
+                    ..one_session()
+                },
+                Session {
+                    started: parse_timestamp("2026-10-25T10:00:00Z").unwrap(),
+                    ..one_session()
+                },
+            ],
+            "the day before is dropped; UTC midnight of the date and later are kept"
         );
     }
 

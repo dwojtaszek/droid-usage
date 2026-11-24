@@ -17,7 +17,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
     reason = "CLI entry point reads the host environment and wall clock"
 )]
 fn main() -> Result<(), Box<dyn Error>> {
-    let mode = cli::parse_args(env::args().skip(1))?;
+    let args = cli::parse_args(env::args().skip(1))?;
+    let mode = args.mode;
     let home = PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?);
     let stdout = if console::colors_enabled() {
         app::Stdout::Terminal
@@ -40,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     app::run(
         &home,
         refresh,
+        args.since,
         Utc::now(),
         app::use_color(stdout, no_color),
         &mut io::stdout().lock(),

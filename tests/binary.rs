@@ -58,6 +58,29 @@ fn unknown_argument_fails_and_is_named() {
     assert!(stderr.contains("--bogus"), "{stderr}");
 }
 
+#[test]
+fn an_invalid_since_date_fails_and_is_named() {
+    let home = ScratchDir::new("binary-bad-since");
+    let output = run_binary(&["--offline", "--since", "yesterday"], &home);
+
+    assert!(
+        !output.status.success(),
+        "an invalid --since date makes the run exit with a failure status"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("yesterday"), "{stderr}");
+}
+
+#[test]
+fn a_valid_since_date_runs_the_report() {
+    let home = ScratchDir::new("binary-since");
+    let output = run_binary(&["--offline", "--since", "2026-01-01"], &home);
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("By source"), "{stdout}");
+}
+
 // Drift check: the regeneration command in `tests/golden/anonymize.py` (the binary, with HOME set to the fixtures
 // and `NO_COLOR=1`) must reproduce the saved golden files byte for byte.
 #[test]

@@ -7,7 +7,7 @@ use std::fmt::Display;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::download::Downloads;
 use crate::model::{self, Session, Source};
@@ -95,7 +95,7 @@ pub const fn use_color(stdout: Stdout, no_color: NoColor) -> report::Colors {
 
 type SourceReader = fn(&Path) -> Result<model::Read, String>;
 
-/// Runs the report. The report goes to `out`. Warnings go to `err`.
+/// Runs the report. The report goes to `out`. Warnings go to `err`. `since`, when present, keeps only the sessions that started on or after that UTC date.
 ///
 /// # Errors
 ///
@@ -103,6 +103,7 @@ type SourceReader = fn(&Path) -> Result<model::Read, String>;
 pub fn run<F>(
     home: &Path,
     refresh_mode: SourceRefresh<F>,
+    since: Option<NaiveDate>,
     now: DateTime<Utc>,
     colors: report::Colors,
     out: &mut impl Write,
@@ -139,6 +140,10 @@ where
         {
             warn(err, warning);
         }
+    }
+
+    if let Some(since) = since {
+        model::retain_since(&mut sessions, since);
     }
 
     if let SourceRefresh::Online(download) = refresh_mode
@@ -260,6 +265,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -299,6 +305,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -340,6 +347,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -364,6 +372,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -386,6 +395,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::Online(download),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -415,6 +425,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::Online(download),
+            None,
             at(),
             Colors::Off,
             &mut out,
@@ -438,6 +449,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::On,
             &mut colored,
@@ -447,6 +459,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             at(),
             Colors::Off,
             &mut plain,
@@ -470,6 +483,7 @@ mod tests {
             run(
                 &home,
                 SourceRefresh::offline(),
+                None,
                 at(),
                 Colors::Off,
                 &mut out,
@@ -489,6 +503,7 @@ mod tests {
             run(
                 &home,
                 SourceRefresh::offline(),
+                None,
                 at(),
                 Colors::Off,
                 &mut out,
@@ -517,6 +532,7 @@ mod tests {
         run(
             &home,
             SourceRefresh::offline(),
+            None,
             later,
             Colors::Off,
             &mut out,
@@ -528,6 +544,65 @@ mod tests {
             last_checked(&dirs.prices),
             Some(at()),
             "an offline run does not change the recorded price check time"
+        );
+    }
+
+    #[test]
+    fn a_since_date_filters_out_older_sessions() {
+        let home = ScratchDir::new("app-since");
+        let logs = home.join(".pi/agent/sessions/--work-pi-since--");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            logs.join("session.jsonl"),
+            concat!(
+                r#"{"type":"session","version":3,"timestamp":"2026-10-05T15:04:35Z","cwd":"/work/pi-since"}"#,
+                "\n",
+                r#"{"type":"message","message":{"role":"assistant","model":"gpt-5.6-sol","usage":{"input":1000000,"output":1000000,"cost":{"total":0.0}}}}"#,
+            ),
+        )
+        .unwrap();
+        let dirs = SnapshotDirs::under(&home);
+        apply(
+            &dirs.prices,
+            &dirs.multipliers,
+            at(),
+            SAMPLE_TABLE,
+            SAMPLE_PAGE,
+        )
+        .unwrap();
+        let on_the_day = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+        let after = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run(
+            &home,
+            SourceRefresh::offline(),
+            Some(on_the_day),
+            at(),
+            Colors::Off,
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(out).unwrap().contains("pi-since"),
+            "a session on the since date is kept"
+        );
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run(
+            &home,
+            SourceRefresh::offline(),
+            Some(after),
+            at(),
+            Colors::Off,
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        assert!(
+            !String::from_utf8(out).unwrap().contains("pi-since"),
+            "a session before the since date is dropped"
         );
     }
 }
