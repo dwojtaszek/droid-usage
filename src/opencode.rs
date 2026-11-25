@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -74,13 +74,13 @@ fn count_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> 
 }
 
 /// `time_created` holds epoch milliseconds, but its column type is TEXT, so SQLite may store them as text.
-fn started_at(value: &SqlValue) -> Option<DateTime<Utc>> {
+fn started_at(value: &SqlValue) -> Option<Timestamp> {
     let millis = match value {
         SqlValue::Integer(millis) => *millis,
         SqlValue::Text(text) => text.parse().ok()?,
         _ => return None,
     };
-    DateTime::from_timestamp_millis(millis)
+    Timestamp::from_millisecond(millis).ok()
 }
 
 /// The model id from a stored model value. The value is JSON with an `id` field, or a plain name in older rows.
@@ -144,7 +144,7 @@ mod tests {
             "the first session keeps the model id from its model json"
         );
         assert_eq!(
-            first.started.timestamp_millis(),
+            first.started.as_millisecond(),
             1_792_259_191_988,
             "the first session start time is the recorded millisecond timestamp"
         );
@@ -269,7 +269,7 @@ mod tests {
             "the session row is read when timestamps are stored as integers"
         );
         assert_eq!(
-            read.sessions[0].started.timestamp_millis(),
+            read.sessions[0].started.as_millisecond(),
             1_792_259_191_988,
             "an integer timestamp is read as the same millisecond time"
         );
@@ -290,7 +290,7 @@ mod tests {
         fn integer_time_stored_as_text_reads_as_epoch_millis(millis in any::<i64>()) {
             prop_assert_eq!(
                 started_at(&SqlValue::Text(millis.to_string())),
-                DateTime::from_timestamp_millis(millis)
+                Timestamp::from_millisecond(millis).ok()
             );
         }
     }

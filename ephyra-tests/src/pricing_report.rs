@@ -2,9 +2,9 @@
 
 use std::ops::ControlFlow;
 
-use chrono::DateTime;
 use droid_usage::model::{Session, Source as UsageSource, Tokens};
 use ephyra::{Gen, GenExt, Source, gens};
+use jiff::Timestamp;
 
 /// A synthetic batch of sessions covering all five sources and tricky display names.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +60,7 @@ fn draw_session(g: &mut Source) -> Session {
     };
     // Range spans 2025-10-09 through 2027-03-14, exercising both before and after the 2026-11-22 promo end date.
     let secs = g.int(1_760_000_000i64..=1_805_000_000);
-    let started = DateTime::from_timestamp(secs, 0).expect("valid timestamp");
+    let started = Timestamp::new(secs, 0).expect("valid timestamp");
     let cost_usd = if source == UsageSource::Droid || g.bool_with(0.4) {
         None
     } else {

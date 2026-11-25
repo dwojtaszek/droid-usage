@@ -5,10 +5,11 @@ pub mod common;
 use std::fs;
 use std::path::Path;
 
-use chrono::{DateTime, TimeZone, Utc};
 use common::ScratchDir;
 use droid_usage::prices::{self, PriceBook};
 use droid_usage::{agy, droid, multipliers, opencode, pricing};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use rusqlite::{Connection, params};
 
 fn write(path: &Path, text: &str) {
@@ -254,8 +255,18 @@ fn droid_sessions_are_priced_with_the_snapshot_in_effect_when_they_started() {
     // The session starts on Oct 5, after the Oct 1 prices and multipliers and before the Oct 10 changes.
     let prices_dir = root.join("prices");
     let multipliers_dir = root.join("multipliers");
-    let early: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap();
-    let late: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 10, 10, 0, 0, 0).unwrap();
+    let early: Timestamp = Date::new(2026, 10, 1)
+        .unwrap()
+        .at(0, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp();
+    let late: Timestamp = Date::new(2026, 10, 10)
+        .unwrap()
+        .at(0, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp();
     let page = |multiplier: &str| format!("| GLM-5.3 | `glm-5.3` | {multiplier}× | `high` |");
     let _ = prices::save(
         &prices_dir,

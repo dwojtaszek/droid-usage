@@ -13,6 +13,7 @@ trap 'cd / && rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/scripts"
 cp "$(dirname "$0")/common.sh" "$scratch/scripts/"
 cp "$(dirname "$0")/pre-pr-test.sh" "$scratch/scripts/"
+cp "$(dirname "$0")/check-price-keys.py" "$scratch/scripts/"
 cd "$scratch" || exit 2
 
 # Sourcing common.sh cds to the root of the copy, so mutants.out and the known list are scratch files.
@@ -185,6 +186,22 @@ chmod +x fake-home/.cargo/bin/cargo
 HOME=$PWD/fake-home GATE_TEST_COUNT=$MIN_TEST_COUNT scripts/pre-pr-test.sh '@{upstream}' >pre-pr.log 2>&1
 check "caller-relative base survives snapshot and timeout" 0 "$?"
 check "pre-PR snapshot is removed after success" 1 "$(git worktree list --porcelain | grep -c '^worktree ')"
+
+python3 -B - <<'PYTHON'
+import runpy
+from unittest.mock import patch
+
+main = runpy.run_path("scripts/check-price-keys.py")["main"]
+with patch.dict(main.__globals__, {"list_keys": lambda: [("glm-5.1", "old"), ("active", "new")]}):
+    for rates, models, expected in [
+        ({"old": {}, "new": {}}, {"active": {}}, 0),
+        ({"new": {}}, {"active": {}}, 1),
+        ({"old": {}, "new": {}}, {}, 1),
+    ]:
+        with patch.dict(main.__globals__, {"newest_snapshot": lambda _: {"rates": rates, "models": models}}):
+            assert main() == expected
+PYTHON
+check "retired models still require a list price" 0 "$?"
 
 echo
 if ((${#failures[@]})); then

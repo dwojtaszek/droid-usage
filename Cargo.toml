@@ -6,7 +6,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 comfy-table = "8.0.1"
 console = "0.16.6"
 rusqlite = { version = "0.41.0", features = ["bundled"] }

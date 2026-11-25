@@ -330,16 +330,20 @@ pub fn write_report(out: &mut impl Write, sessions: &[Session], colors: Colors) 
 
 #[cfg(test)]
 mod tests {
-    use chrono::{NaiveDate, TimeZone, Utc};
+    use jiff::civil::Date;
     use proptest::prelude::{prop_assert, prop_assert_eq, proptest};
 
     use super::*;
     use crate::model::{Source, Tokens};
 
-    fn session_on(day: NaiveDate, input: u64) -> Session {
+    fn session_on(day: Date, input: u64) -> Session {
         Session {
             source: Source::Droid,
-            started: Utc.from_utc_datetime(&day.and_hms_opt(12, 0, 0).unwrap()),
+            started: day
+                .at(12, 0, 0, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
             project: None,
             model: None,
             tokens: Tokens {
@@ -352,8 +356,8 @@ mod tests {
         }
     }
 
-    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    fn date(year: i16, month: i8, day: i8) -> Date {
+        Date::new(year, month, day).unwrap()
     }
 
     /// Two weeks of sessions, the second one priced.

@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use jiff::Timestamp;
+use jiff::civil::Date;
 
 /// Where a session was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -85,7 +86,7 @@ pub struct Session {
     /// Where the session was recorded.
     pub source: Source,
     /// When the session started (UTC).
-    pub started: DateTime<Utc>,
+    pub started: Timestamp,
     /// Project directory, when the source records one.
     pub project: Option<String>,
     /// Model name, when the source records one.
@@ -133,16 +134,64 @@ pub fn add_source<E: fmt::Display>(
 }
 
 /// Keeps only the sessions that started on or after `since`, compared as UTC dates. A session at exactly UTC midnight of `since` is kept.
-pub fn retain_since(sessions: &mut Vec<Session>, since: NaiveDate) {
-    sessions.retain(|session| session.started.date_naive() >= since);
+pub fn retain_since(sessions: &mut Vec<Session>, since: Date) {
+    sessions.retain(|session| session.started.to_zoned(jiff::tz::TimeZone::UTC).date() >= since);
 }
 
-/// Parses an RFC 3339 timestamp into UTC. Returns `None` for any other text.
+/// Parses an RFC 3339 timestamp into UTC. Leap seconds use Jiff's mapping to second 59.
 #[must_use]
-pub fn parse_timestamp(text: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(text)
-        .ok()
-        .map(|time| time.with_timezone(&Utc))
+pub fn parse_timestamp(text: &str) -> Option<Timestamp> {
+    // Jiff also parses ISO 8601 forms outside the session readers' RFC 3339 format.
+    let [
+        _,
+        _,
+        _,
+        _,
+        b'-',
+        _,
+        _,
+        b'-',
+        _,
+        _,
+        b'T' | b't' | b' ',
+        _,
+        _,
+        b':',
+        _,
+        _,
+        b':',
+        _,
+        _,
+        rest @ ..,
+    ] = text.as_bytes()
+    else {
+        return None;
+    };
+    let (zone, fraction_digits) = if let Some(fraction) = rest.strip_prefix(b".") {
+        let end = fraction.iter().position(|byte| !byte.is_ascii_digit())?;
+        if end == 0 {
+            return None;
+        }
+        (fraction.get(end..)?, end)
+    } else {
+        (rest, 0)
+    };
+    if !matches!(
+        zone,
+        [b'Z' | b'z']
+            | [b'+' | b'-', b'0'..=b'1', b'0'..=b'9', b':', _, _]
+            | [b'+' | b'-', b'2', b'0'..=b'3', b':', _, _]
+    ) {
+        return None;
+    }
+    if let 0..=9 = fraction_digits {
+        text.parse().ok()
+    } else {
+        // Keep the first nine fractional digits, as the old reader did.
+        let nanos = text.get(..29)?;
+        let offset = text.get(20 + fraction_digits..)?;
+        format!("{nanos}{offset}").parse().ok()
+    }
 }
 
 #[cfg(test)]
@@ -328,10 +377,7 @@ mod tests {
         after.started = parse_timestamp("2026-10-25T12:00:00+02:00").unwrap();
         let mut sessions = vec![session, at_midnight, after];
 
-        retain_since(
-            &mut sessions,
-            NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
-        );
+        retain_since(&mut sessions, Date::new(2026, 10, 25).unwrap());
 
         assert_eq!(
             sessions,
@@ -364,16 +410,37 @@ mod tests {
 
     use proptest::prelude::{prop, prop_assert_eq, proptest};
 
+    #[test]
+    fn timestamps_keep_the_rfc3339_reader_boundary() {
+        for text in [
+            "2026-10-02T12:30Z",
+            "20261002T123004Z",
+            "2026-10-02T12:30:04+02",
+            "2026-10-02T12:30:04+0230",
+            "2026-10-02T12:30:04+02:30:10",
+            "2026-10-02T12:30:04+24:00",
+            "2026-10-02T12:30:04,123Z",
+            "2026-10-02T12:30:04Z[UTC]",
+        ] {
+            assert_eq!(parse_timestamp(text), None, "{text}");
+        }
+        let utc = parse_timestamp("2026-10-02T12:30:04.123Z");
+        assert!(utc.is_some());
+        assert_eq!(parse_timestamp("2026-10-02t12:30:04.123z"), utc);
+        assert_eq!(parse_timestamp("2026-10-02 14:30:04.123+02:00"), utc);
+        assert_eq!(parse_timestamp("2026-10-02T12:30:04.1230000001Z"), utc);
+    }
+
     proptest! {
         #[test]
         fn any_printed_timestamp_round_trips_through_parse_timestamp(
             // From year 0 to 2100, with independent seconds and nanoseconds, so
-            // fractional-second handling is covered; full chrono range ends are not needed.
+            // fractional-second handling is covered; representable range ends are not needed.
             secs in -62_167_219i64..4_102_444_800i64,
-            nanos in 0u32..1_000_000_000,
+            nanos in 0i32..1_000_000_000,
         ) {
-            let time: DateTime<Utc> = DateTime::from_timestamp(secs, nanos).unwrap();
-            prop_assert_eq!(parse_timestamp(&time.to_rfc3339()), Some(time));
+            let time: Timestamp = Timestamp::new(secs, nanos).unwrap();
+            prop_assert_eq!(parse_timestamp(&time.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string()), Some(time));
         }
 
         #[test]
@@ -381,15 +448,15 @@ mod tests {
             starts in prop::collection::vec(-62_167_219_200_000i64..4_102_444_800_000, 0..40),
             since_millis in -62_167_219_200_000i64..4_102_444_800_000,
         ) {
-            let since = DateTime::from_timestamp_millis(since_millis)
+            let since = Timestamp::from_millisecond(since_millis)
                 .unwrap()
-                .date_naive();
+                .to_zoned(jiff::tz::TimeZone::UTC).date();
             // The oracle compares instants against UTC midnight, not the expression retain_since uses.
-            let since_start = since.and_hms_opt(0, 0, 0).unwrap().and_utc();
+            let since_start = since.at(0, 0, 0, 0).to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp();
             let mut sessions: Vec<Session> = starts
                 .iter()
                 .map(|millis| Session {
-                    started: DateTime::from_timestamp_millis(*millis).unwrap(),
+                    started: Timestamp::from_millisecond(*millis).unwrap(),
                     ..one_session()
                 })
                 .collect();

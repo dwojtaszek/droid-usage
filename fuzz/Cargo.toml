@@ -8,7 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 libfuzzer-sys = "0.4"
 
 [dependencies.droid-usage]

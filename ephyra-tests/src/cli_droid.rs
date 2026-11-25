@@ -2,8 +2,9 @@
 
 use std::ops::ControlFlow;
 
-use chrono::{DateTime, NaiveDate, TimeDelta};
 use ephyra::{Gen, GenExt, Source};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use serde_json::json;
 
 /// One CLI token in a synthetic `droid-usage` invocation.
@@ -12,7 +13,7 @@ pub enum CliToken {
     /// `--offline` flag.
     Offline,
     /// Valid `--since YYYY-MM-DD` flag pair.
-    SinceValid(NaiveDate),
+    SinceValid(Date),
     /// `--since` followed by an invalid date string.
     SinceInvalid(String),
     /// `--since` with no following argument.
@@ -38,7 +39,7 @@ impl CliArgCase {
                 CliToken::Offline => out.push("--offline".to_owned()),
                 CliToken::SinceValid(d) => {
                     out.push("--since".to_owned());
-                    out.push(d.format("%Y-%m-%d").to_string());
+                    out.push(d.strftime("%Y-%m-%d").to_string());
                 }
                 CliToken::SinceInvalid(bad) => {
                     out.push("--since".to_owned());
@@ -59,7 +60,7 @@ fn draw_cli_token(g: &mut Source) -> CliToken {
         0 => CliToken::Offline,
         1 => {
             let days = g.int(0i64..=2000);
-            let date = NaiveDate::from_ymd_opt(2024, 1, 1).expect("valid") + TimeDelta::days(days);
+            let date = Date::new(2024, 1, 1).expect("valid") + jiff::Span::new().days(days);
             CliToken::SinceValid(date)
         }
         2 => CliToken::SinceInvalid((*g.pick(&bad_dates)).to_owned()),
@@ -141,9 +142,10 @@ impl DroidHeaderLine {
             }
             Self::SessionStart { cwd: None } => json!({ "type": "session_start" }).to_string(),
             Self::Message { ts_secs } => {
-                let ts = DateTime::from_timestamp(*ts_secs, 0)
+                let ts = Timestamp::new(*ts_secs, 0)
                     .expect("valid timestamp")
-                    .to_rfc3339();
+                    .strftime("%Y-%m-%dT%H:%M:%S%.f%:z")
+                    .to_string();
                 json!({ "type": "message", "timestamp": ts }).to_string()
             }
             Self::Malformed => "{not json".to_owned(),
@@ -304,8 +306,8 @@ pub fn valid_multi_snapshot_case(case: &MultiSnapshotCase) -> bool {
         && case
             .fetched_secs
             .iter()
-            .all(|s| DateTime::from_timestamp(*s, 0).is_some())
-        && DateTime::from_timestamp(case.query_secs, 0).is_some()
+            .all(|s| Timestamp::new(*s, 0).is_ok())
+        && Timestamp::new(case.query_secs, 0).is_ok()
 }
 
 /// Metrics for `multi_snapshot_cases`:

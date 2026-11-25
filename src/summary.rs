@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{Datelike, Days, NaiveDate};
+use jiff::ToSpan;
+use jiff::civil::Date;
 
 use crate::model::{Session, Tokens, count_f64};
 
@@ -48,18 +49,20 @@ impl Totals {
 
 /// Monday of the week that contains `date`.
 #[must_use]
-pub fn week_start(date: NaiveDate) -> NaiveDate {
-    let back = u64::from(date.weekday().num_days_from_monday());
-    date.checked_sub_days(Days::new(back)).unwrap_or(date)
+pub fn week_start(date: Date) -> Date {
+    let back = i64::from(date.weekday().to_monday_zero_offset());
+    date.checked_sub(back.days()).unwrap_or(date)
 }
 
 /// Totals for each week from the first to the last week with a session, in order. Empty weeks in between appear with zero totals.
 #[must_use]
-pub fn weekly(sessions: &[Session]) -> Vec<(NaiveDate, Totals)> {
-    let mut by_week: BTreeMap<NaiveDate, Totals> = BTreeMap::new();
+pub fn weekly(sessions: &[Session]) -> Vec<(Date, Totals)> {
+    let mut by_week: BTreeMap<Date, Totals> = BTreeMap::new();
     for session in sessions {
         by_week
-            .entry(week_start(session.started.date_naive()))
+            .entry(week_start(
+                session.started.to_zoned(jiff::tz::TimeZone::UTC).date(),
+            ))
             .or_default()
             .add_session(session);
     }
@@ -71,7 +74,7 @@ pub fn weekly(sessions: &[Session]) -> Vec<(NaiveDate, Totals)> {
     let mut week = first;
     while week <= last {
         weeks.push((week, by_week.get(&week).cloned().unwrap_or_default()));
-        let Some(next) = week.checked_add_days(Days::new(7)) else {
+        let Ok(next) = week.checked_add(7.days()) else {
             break;
         };
         week = next;
@@ -113,16 +116,20 @@ pub(crate) fn all_totals(sessions: &[Session]) -> Totals {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
+
     use proptest::prelude::{prop, prop_assert, prop_assert_eq, proptest};
 
     use super::*;
     use crate::model::{Source, parse_timestamp};
 
-    fn session_on(day: NaiveDate, input: u64) -> Session {
+    fn session_on(day: Date, input: u64) -> Session {
         Session {
             source: Source::Droid,
-            started: Utc.from_utc_datetime(&day.and_hms_opt(12, 0, 0).unwrap()),
+            started: day
+                .at(12, 0, 0, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
             project: None,
             model: None,
             tokens: Tokens {
@@ -135,13 +142,13 @@ mod tests {
         }
     }
 
-    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    fn date(year: i16, month: i8, day: i8) -> Date {
+        Date::new(year, month, day).unwrap()
     }
 
     fn session_at_offset(offset: u32, input: u64) -> Session {
         let base = date(2026, 1, 1);
-        session_on(base + Days::new(u64::from(offset)), input)
+        session_on(base + i64::from(offset).days(), input)
     }
 
     fn as_u64(count: usize) -> u64 {
@@ -181,7 +188,7 @@ mod tests {
                 ..session_on(date(2026, 10, 5), 2)
             },
         ];
-        let starts: Vec<NaiveDate> = weekly(&sessions).iter().map(|(start, _)| *start).collect();
+        let starts: Vec<Date> = weekly(&sessions).iter().map(|(start, _)| *start).collect();
         assert_eq!(
             starts,
             [date(2026, 10, 12), date(2026, 10, 19)],
@@ -196,7 +203,7 @@ mod tests {
             session_on(date(2026, 10, 19), 300),
         ];
         let weeks = weekly(&sessions);
-        let starts: Vec<NaiveDate> = weeks.iter().map(|(start, _)| *start).collect();
+        let starts: Vec<Date> = weeks.iter().map(|(start, _)| *start).collect();
         assert_eq!(
             starts,
             [date(2026, 10, 5), date(2026, 10, 12), date(2026, 10, 19)],
@@ -369,18 +376,18 @@ mod tests {
                 .collect();
             let weeks = weekly(&sessions);
             for (start, _) in &weeks {
-                prop_assert_eq!(start.weekday().num_days_from_monday(), 0);
+                prop_assert_eq!(start.weekday().to_monday_zero_offset(), 0);
             }
             for pair in weeks.windows(2) {
-                prop_assert_eq!(pair[1].0.signed_duration_since(pair[0].0).num_days(), 7);
+                prop_assert_eq!(pair[1].0.duration_since(pair[0].0).as_hours() / 24, 7);
             }
         }
 
         #[test]
         fn each_session_falls_in_its_own_week(offset in 0u32..800) {
-            let day = session_at_offset(offset, 0).started.date_naive();
+            let day = session_at_offset(offset, 0).started.to_zoned(jiff::tz::TimeZone::UTC).date();
             let start = week_start(day);
-            let into_week = day.signed_duration_since(start).num_days();
+            let into_week = day.duration_since(start).as_hours() / 24;
             prop_assert!((0..7).contains(&into_week));
         }
 

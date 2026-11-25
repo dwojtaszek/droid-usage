@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
-use chrono::{DateTime, Utc};
 use ephyra::{Gen, GenExt, Source, gens};
+use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
 /// Entry kind inside a `LiteLLM` pricing JSON object.
@@ -45,7 +45,7 @@ pub enum PriceEntryKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PriceTableCase {
     /// Snapshot fetch timestamp.
-    pub fetched: DateTime<Utc>,
+    pub fetched: Timestamp,
     /// Model key -> pricing entry mapping.
     pub entries: BTreeMap<String, PriceEntryKind>,
     /// Bare model key queried against `PriceBook`.
@@ -202,7 +202,7 @@ fn draw_price_table(g: &mut Source) -> PriceTableCase {
         let _ = entries.entry(key).or_insert(entry);
     }
     PriceTableCase {
-        fetched: DateTime::from_timestamp(1_760_000_000, 0).expect("valid timestamp"),
+        fetched: Timestamp::new(1_760_000_000, 0).expect("valid timestamp"),
         entries,
         query_bare: if g.bool() {
             "gpt-x".to_owned()
