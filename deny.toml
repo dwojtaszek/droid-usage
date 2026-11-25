@@ -28,10 +28,6 @@ multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 skip = [
-    # Two syn majors come from separate dependency trees: chrono's Windows
-    # helpers and rusqlite's proc macros. Neither tree can be unified from here.
-    { crate = "syn@2", reason = "pulled in by chrono and the Windows helper crates" },
-    { crate = "syn@3", reason = "pulled in by rusqlite's sqlite-wasm and thiserror" },
     # windows-sys 0.52 comes from ring (rustls under ureq), 0.61 from console and crossterm (comfy-table).
     # Both are Windows-only bindings that each tree pins; no single version satisfies both.
     { crate = "windows-sys@0.52", reason = "pinned by ring, the TLS backend under ureq" },

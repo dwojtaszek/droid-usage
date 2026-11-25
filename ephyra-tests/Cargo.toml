@@ -5,7 +5,7 @@ publish = false
 edition = "2024"
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 droid-usage = { path = ".." }
 ephyra = { version = "0.0.1", features = ["coverage"] }
 rusqlite = { version = "0.41.0", features = ["bundled"] }

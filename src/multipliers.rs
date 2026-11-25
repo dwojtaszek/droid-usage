@@ -8,7 +8,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use serde_json::{Map, Value, json};
 
 use crate::model::parse_timestamp;
@@ -30,7 +31,7 @@ fn list_keys() -> impl Iterator<Item = (&'static str, &'static str)> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Promo {
     /// Last day of the promotion, in UTC.
-    pub through: NaiveDate,
+    pub through: Date,
     /// Multiplier once the promotion has ended.
     pub after: f64,
 }
@@ -47,7 +48,7 @@ pub struct Multiplier {
 impl Multiplier {
     /// The multiplier for a session that started on `day` (UTC).
     #[must_use]
-    pub fn on(&self, day: NaiveDate) -> f64 {
+    pub fn on(&self, day: Date) -> f64 {
         match self.promo {
             Some(promo) if day > promo.through => promo.after,
             _ => self.rate,
@@ -59,7 +60,7 @@ impl Multiplier {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// When the page was fetched (UTC).
-    pub fetched: DateTime<Utc>,
+    pub fetched: Timestamp,
     /// Multipliers keyed by Droid model ID.
     pub models: BTreeMap<String, Multiplier>,
 }
@@ -100,7 +101,7 @@ struct Note {
 /// # Errors
 ///
 /// Returns an error when the page has no model rows, when a model ID is listed twice, or when a promotion note is malformed or does not match exactly one row.
-pub fn parse_page(text: &str, fetched: DateTime<Utc>) -> Result<Snapshot, PageError> {
+pub fn parse_page(text: &str, fetched: Timestamp) -> Result<Snapshot, PageError> {
     let mut models = BTreeMap::new();
     let mut ids_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut notes = Vec::new();
@@ -185,7 +186,9 @@ fn note(line: &str) -> Result<Note, PageError> {
         name: plain_name(name).to_owned(),
         rate: multiplier_text(rate).ok_or_else(fail)?,
         promo: Promo {
-            through: NaiveDate::parse_from_str(through, "%B %d, %Y").map_err(|_| fail())?,
+            through: Date::strptime("%B %d, %Y", through)
+                .or_else(|_| Date::strptime("%b %d, %Y", through))
+                .map_err(|_| fail())?,
             after: multiplier_text(after.trim_end_matches('.')).ok_or_else(fail)?,
         },
     })
@@ -201,7 +204,7 @@ impl Snapshot {
             .map(|(id, multiplier)| {
                 let promo = multiplier.promo.map_or(Value::Null, |promo| {
                     json!({
-                        "through": promo.through.format("%Y-%m-%d").to_string(),
+                        "through": promo.through.strftime("%Y-%m-%d").to_string(),
                         "after": promo.after,
                     })
                 });
@@ -212,7 +215,7 @@ impl Snapshot {
             })
             .collect();
         json!({
-            "fetched": self.fetched.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "fetched": self.fetched.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
             "models": models,
         })
     }
@@ -228,8 +231,7 @@ impl Snapshot {
                 let promo = match &entry["promo"] {
                     Value::Null => None,
                     promo => Some(Promo {
-                        through: NaiveDate::parse_from_str(promo["through"].as_str()?, "%Y-%m-%d")
-                            .ok()?,
+                        through: Date::strptime("%Y-%m-%d", promo["through"].as_str()?).ok()?,
                         after: valid_multiplier(promo["after"].as_f64()?)?,
                     }),
                 };
@@ -266,12 +268,12 @@ impl MultiplierBook {
 
     /// The multiplier for `model` for a session that started at `at`, from the snapshot in effect at that time. Uses the earliest snapshot when `at` comes before all of them.
     #[must_use]
-    pub fn multiplier_at(&self, model: &str, at: DateTime<Utc>) -> Option<f64> {
+    pub fn multiplier_at(&self, model: &str, at: Timestamp) -> Option<f64> {
         let snapshot = snapshot_in_effect(&self.snapshots, at, |snapshot| snapshot.fetched)?;
         snapshot
             .models
             .get(model)
-            .map(|multiplier| multiplier.on(at.date_naive()))
+            .map(|multiplier| multiplier.on(at.to_zoned(jiff::tz::TimeZone::UTC).date()))
     }
 }
 
@@ -315,7 +317,6 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
 
-    use chrono::TimeZone;
     use proptest::prelude::{prop, prop_assert, prop_assert_eq, proptest};
 
     use super::*;
@@ -335,11 +336,16 @@ mod tests {
 <sup>†</sup> Promotional pricing. GPT-5.6 Sol Fast bills at 3.2× through November 22, 2026, then returns to 4×.
 </Note>";
 
-    fn at(month: u32, day: u32, hour: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, month, day, hour, 0, 0).unwrap()
+    fn at(month: i8, day: i8, hour: i8) -> Timestamp {
+        Date::new(2026, month, day)
+            .unwrap()
+            .at(hour, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
-    fn page_snapshot(fetched: DateTime<Utc>) -> Snapshot {
+    fn page_snapshot(fetched: Timestamp) -> Snapshot {
         parse_page(PAGE, fetched).unwrap()
     }
 
@@ -358,7 +364,7 @@ mod tests {
         let promo = snapshot.models["gpt-5.6-sol"].promo.unwrap();
         assert_eq!(
             promo.through,
-            NaiveDate::from_ymd_opt(2026, 11, 22).unwrap(),
+            Date::new(2026, 11, 22).unwrap(),
             "the gpt-5.6-sol promotion ends on the last listed day"
         );
         assert_eq!(
@@ -559,6 +565,17 @@ mod tests {
     }
 
     #[test]
+    fn promotion_notes_accept_abbreviated_months() {
+        let date = note(
+            "Promotional pricing. Model bills at 1× through Nov 22, 2026, then returns to 2×.",
+        )
+        .unwrap()
+        .promo
+        .through;
+        assert_eq!(date, Date::new(2026, 11, 22).unwrap());
+    }
+
+    #[test]
     fn recorded_models_page_keeps_rates_and_promotions() {
         let snapshot = parse_page(RECORDED_PAGE, at(10, 25, 4)).unwrap();
         let sol = snapshot.models["gpt-5.6-sol"];
@@ -569,7 +586,7 @@ mod tests {
         assert_eq!(
             sol.promo,
             Some(Promo {
-                through: NaiveDate::from_ymd_opt(2026, 11, 22).unwrap(),
+                through: Date::new(2026, 11, 22).unwrap(),
                 after: 2.0,
             }),
             "the recorded promotion keeps its end date and return rate"
@@ -581,7 +598,7 @@ mod tests {
         );
         assert_eq!(
             flash.promo.map(|promo| promo.through),
-            NaiveDate::from_ymd_opt(2027, 1, 1),
+            Date::new(2027, 1, 1).ok(),
             "the gemini flash promotion ends on the recorded date"
         );
         assert_eq!(
@@ -783,13 +800,13 @@ mod tests {
             ),
         ) {
             let snapshot = Snapshot {
-                fetched: DateTime::from_timestamp(fetched_secs, 0).unwrap(),
+                fetched: Timestamp::new(fetched_secs, 0).unwrap(),
                 models: models
                     .into_iter()
                     .map(|(id, (rate, promo))| {
                         let promo = promo.map(|(days, after)| Promo {
-                            through: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
-                                + chrono::TimeDelta::days(days),
+                            through: Date::new(2026, 1, 1).unwrap()
+                                + jiff::Span::new().days(days),
                             after,
                         });
                         (id, Multiplier { rate, promo })

@@ -2,7 +2,7 @@
 """Check that every LIST_KEYS pair exists in the newest saved snapshots.
 
 Each pair is (Droid model id, LiteLLM key). The LiteLLM key must be a rate in the newest
-price snapshot, and the Droid model id must be a model in the newest multiplier snapshot.
+price snapshot. Active Droid model IDs must be in the newest multiplier snapshot.
 Both snapshots live under ~/.local/share/droid-usage/. Exits 1 when a key is missing or a
 snapshot does not exist.
 """
@@ -13,6 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path.home() / ".local" / "share" / "droid-usage"
+# Factory removed these from its live table. Keep their list-price keys for
+# historical sessions. The recorded-page test verifies their multipliers.
+RETIRED_MODEL_IDS = {"glm-5.1", "kimi-k2.5"}
 
 
 def list_keys() -> list[tuple[str, str]]:
@@ -48,7 +51,7 @@ def main() -> int:
     for droid_id, litellm_key in pairs:
         if litellm_key not in rates:
             missing.append(f"price key {litellm_key} (for {droid_id}) is not in the newest price snapshot")
-        if droid_id not in models:
+        if droid_id not in models and droid_id not in RETIRED_MODEL_IDS:
             missing.append(f"model {droid_id} is not in the newest multiplier snapshot")
     for line in missing:
         print(line)

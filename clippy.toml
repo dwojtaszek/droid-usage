@@ -8,11 +8,10 @@ enforce-iter-loop-reborrow = true
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "use BTreeMap so iteration and output order stay deterministic" },
     { path = "std::collections::HashSet", reason = "use BTreeSet so iteration and output order stay deterministic" },
-    { path = "chrono::Local", reason = "use Utc or inject a DateTime<Utc> so reports and tests do not depend on the host timezone" },
 ]
 
 disallowed-methods = [
-    { path = "chrono::Utc::now", reason = "pass now: DateTime<Utc> from main so library code and tests stay deterministic" },
+    { path = "jiff::Timestamp::now", reason = "pass now: Timestamp from main so library code and tests stay deterministic" },
     { path = "std::time::SystemTime::now", reason = "pass a clock from main so library code and tests stay deterministic" },
     { path = "std::env::var", reason = "read environment variables only in main and pass values into the library" },
     { path = "std::env::var_os", reason = "read environment variables only in main and pass values into the library" },

@@ -6,8 +6,8 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use chrono::Utc;
 use droid_usage::{app, cli, download, multipliers, prices};
+use jiff::Timestamp;
 
 /// How long each download may take before it is abandoned.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &home,
         refresh,
         args.since,
-        Utc::now(),
+        Timestamp::now(),
         app::use_color(stdout, no_color),
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),

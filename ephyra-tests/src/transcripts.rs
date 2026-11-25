@@ -2,9 +2,9 @@
 
 use std::ops::ControlFlow;
 
-use chrono::{DateTime, Utc};
 use droid_usage::model::Tokens;
 use ephyra::{Gen, GenExt, Source};
+use jiff::Timestamp;
 use serde_json::json;
 
 /// One line in a synthetic Codex CLI rollout JSONL log.
@@ -54,9 +54,10 @@ impl CodexLine {
     fn render(&self) -> String {
         match self {
             Self::SessionMeta { ts_secs, cwd } => {
-                let ts = DateTime::from_timestamp(*ts_secs, 0)
+                let ts = Timestamp::new(*ts_secs, 0)
                     .expect("valid timestamp")
-                    .to_rfc3339();
+                    .strftime("%Y-%m-%dT%H:%M:%S%.f%:z")
+                    .to_string();
                 match cwd {
                     Some(dir) => json!({
                         "type": "session_meta",
@@ -130,7 +131,7 @@ pub struct CodexStream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedCodexSession {
     /// Session start instant from the first `session_meta` entry.
-    pub started: DateTime<Utc>,
+    pub started: Timestamp,
     /// Project path from the first `session_meta` entry.
     pub project: Option<String>,
     /// Latest model from `turn_context` entries.
@@ -160,7 +161,7 @@ impl CodexStream {
         for line in &self.lines {
             match line {
                 CodexLine::SessionMeta { ts_secs, cwd } if started.is_none() => {
-                    started = DateTime::from_timestamp(*ts_secs, 0);
+                    started = Timestamp::new(*ts_secs, 0).ok();
                     project.clone_from(cwd);
                 }
                 CodexLine::TurnContext { model: Some(m) } => {
@@ -202,7 +203,7 @@ impl CodexStream {
 #[ephyra::generator]
 pub fn valid_codex_stream(stream: &CodexStream) -> bool {
     stream.lines.iter().any(|l| {
-        matches!(l, CodexLine::SessionMeta { ts_secs, .. } if DateTime::from_timestamp(*ts_secs, 0).is_some())
+        matches!(l, CodexLine::SessionMeta { ts_secs, .. } if Timestamp::new(*ts_secs, 0).is_ok())
     })
 }
 
@@ -361,9 +362,10 @@ impl PiLine {
     fn render(&self) -> String {
         match self {
             Self::Session { ts_secs, cwd } => {
-                let ts = DateTime::from_timestamp(*ts_secs, 0)
+                let ts = Timestamp::new(*ts_secs, 0)
                     .expect("valid timestamp")
-                    .to_rfc3339();
+                    .strftime("%Y-%m-%dT%H:%M:%S%.f%:z")
+                    .to_string();
                 match cwd {
                     Some(dir) => {
                         json!({ "type": "session", "timestamp": ts, "cwd": dir }).to_string()
@@ -443,9 +445,9 @@ impl PiStream {
 #[must_use]
 #[ephyra::generator]
 pub fn valid_pi_stream(stream: &PiStream) -> bool {
-    stream.lines.iter().any(|l| {
-        matches!(l, PiLine::Session { ts_secs, .. } if DateTime::from_timestamp(*ts_secs, 0).is_some())
-    })
+    stream.lines.iter().any(
+        |l| matches!(l, PiLine::Session { ts_secs, .. } if Timestamp::new(*ts_secs, 0).is_ok()),
+    )
 }
 
 fn draw_pi_cost(g: &mut Source) -> Option<f64> {

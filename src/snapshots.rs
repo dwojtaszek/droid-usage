@@ -4,7 +4,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use jiff::SignedDuration;
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::model::parse_timestamp;
@@ -94,9 +95,9 @@ pub(crate) fn read_snapshots<T>(
 /// Returns an error when `dir` cannot be read or written.
 pub(crate) fn save_if_changed<S>(
     dir: &Path,
-    fetched: DateTime<Utc>,
+    fetched: Timestamp,
     parse: impl Fn(&Value) -> Option<S>,
-    sort_key: impl Fn(&S) -> DateTime<Utc>,
+    sort_key: impl Fn(&S) -> Timestamp,
     matches_newest: impl FnOnce(&S) -> bool,
     to_json: impl FnOnce() -> Value,
 ) -> io::Result<Refresh> {
@@ -114,8 +115,8 @@ pub(crate) fn save_if_changed<S>(
 /// The snapshot in effect at `at`: the latest one fetched by then, or the earliest when `at` comes before all of them. `snapshots` must be sorted oldest first.
 pub(crate) fn snapshot_in_effect<S>(
     snapshots: &[S],
-    at: DateTime<Utc>,
-    fetched: impl Fn(&S) -> DateTime<Utc>,
+    at: Timestamp,
+    fetched: impl Fn(&S) -> Timestamp,
 ) -> Option<&S> {
     snapshots
         .iter()
@@ -129,11 +130,7 @@ pub(crate) fn snapshot_in_effect<S>(
 /// # Errors
 ///
 /// Returns an error when `dir` cannot be created or written.
-pub(crate) fn write_snapshot(
-    dir: &Path,
-    fetched: DateTime<Utc>,
-    json: &Value,
-) -> io::Result<Refresh> {
+pub(crate) fn write_snapshot(dir: &Path, fetched: Timestamp, json: &Value) -> io::Result<Refresh> {
     fs::create_dir_all(dir)?;
     let name = snapshot_file_name(fetched);
     // The temp name ends in `.tmp`, so `read_snapshots` never reads it.
@@ -159,26 +156,27 @@ fn write_synced(path: &Path, text: &str) -> io::Result<()> {
 /// # Errors
 ///
 /// Returns an error when the snapshot cannot be removed.
-pub(crate) fn remove_snapshot(dir: &Path, fetched: DateTime<Utc>) -> io::Result<()> {
+pub(crate) fn remove_snapshot(dir: &Path, fetched: Timestamp) -> io::Result<()> {
     fs::remove_file(dir.join(snapshot_file_name(fetched)))
 }
 
-fn snapshot_file_name(fetched: DateTime<Utc>) -> String {
-    format!("{}.json", fetched.format("%Y%m%dT%H%M%SZ"))
+fn snapshot_file_name(fetched: Timestamp) -> String {
+    format!("{}.json", fetched.strftime("%Y%m%dT%H%M%SZ"))
 }
 
 /// When the tables were last checked, or `None` if they never were.
 #[must_use]
-pub fn last_checked(dir: &Path) -> Option<DateTime<Utc>> {
+pub fn last_checked(dir: &Path) -> Option<Timestamp> {
     let text = fs::read_to_string(dir.join(CHECKED_FILE)).ok()?;
     parse_timestamp(text.trim())
 }
 
 /// True when the tables have not been checked within the last day.
 #[must_use]
-pub fn is_stale(dir: &Path, now: DateTime<Utc>) -> bool {
-    last_checked(dir)
-        .is_none_or(|checked| now.signed_duration_since(checked) > TimeDelta::hours(MAX_AGE_HOURS))
+pub fn is_stale(dir: &Path, now: Timestamp) -> bool {
+    last_checked(dir).is_none_or(|checked| {
+        now.duration_since(checked) > SignedDuration::from_hours(MAX_AGE_HOURS)
+    })
 }
 
 /// Records `now` as the time the tables were last checked.
@@ -186,24 +184,30 @@ pub fn is_stale(dir: &Path, now: DateTime<Utc>) -> bool {
 /// # Errors
 ///
 /// Returns an error when `dir` cannot be written.
-pub fn record_check(dir: &Path, now: DateTime<Utc>) -> io::Result<()> {
+pub fn record_check(dir: &Path, now: Timestamp) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     fs::write(
         dir.join(CHECKED_FILE),
-        now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        now.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
+    use jiff::civil::Date;
+
     use serde_json::json;
 
     use super::*;
     use crate::testing::ScratchDir;
 
-    fn at(day: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, day, 12, 0, 0).unwrap()
+    fn at(day: i8) -> Timestamp {
+        Date::new(2026, 10, day)
+            .unwrap()
+            .at(12, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
     #[test]
@@ -213,10 +217,7 @@ mod tests {
         assert_eq!(snapshot_in_effect(&items, at(7), |&t| t), Some(&at(5)));
         assert_eq!(snapshot_in_effect(&items, at(10), |&t| t), Some(&at(10)));
         assert_eq!(snapshot_in_effect(&items, at(15), |&t| t), Some(&at(10)));
-        assert_eq!(
-            snapshot_in_effect::<DateTime<Utc>>(&[], at(10), |&t| t),
-            None
-        );
+        assert_eq!(snapshot_in_effect::<Timestamp>(&[], at(10), |&t| t), None);
     }
 
     #[test]
@@ -225,9 +226,9 @@ mod tests {
         assert!(is_stale(&dir, at(10)));
         record_check(&dir, at(10)).unwrap();
         assert_eq!(last_checked(&dir), Some(at(10)));
-        let day = TimeDelta::hours(24);
+        let day = SignedDuration::from_hours(24);
         assert!(!is_stale(&dir, at(10) + day));
-        assert!(is_stale(&dir, at(10) + day + TimeDelta::seconds(1)));
+        assert!(is_stale(&dir, at(10) + day + SignedDuration::from_secs(1)));
     }
 
     #[test]

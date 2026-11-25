@@ -5,7 +5,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::download::Downloads;
 use crate::snapshots::{Refresh, is_stale, record_check, remove_snapshot};
@@ -44,7 +44,7 @@ impl Error for UndoFailed {
 pub fn apply(
     prices_dir: &Path,
     multipliers_dir: &Path,
-    now: DateTime<Utc>,
+    now: Timestamp,
     table: &str,
     page: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -67,7 +67,7 @@ pub fn apply(
 pub fn refresh_prices(
     prices_dir: &Path,
     multipliers_dir: &Path,
-    now: DateTime<Utc>,
+    now: Timestamp,
     download: impl FnOnce() -> Result<Downloads, Box<dyn Error>>,
 ) -> Option<String> {
     // A missing multiplier snapshot forces a download, so Droid costs start on the first run after an upgrade.
@@ -92,16 +92,22 @@ pub fn refresh_prices(
 
 #[cfg(test)]
 mod tests {
+    use jiff::civil::Date;
     use std::fs;
 
-    use chrono::{TimeDelta, TimeZone};
+    use jiff::SignedDuration;
 
     use super::*;
     use crate::snapshots::last_checked;
     use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir};
 
-    fn at() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, 12, 12, 0, 0).unwrap()
+    fn at() -> Timestamp {
+        Date::new(2026, 10, 12)
+            .unwrap()
+            .at(12, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
     #[test]
@@ -257,7 +263,7 @@ mod tests {
         fs::remove_dir_all(&multipliers_dir).unwrap();
         fs::write(&multipliers_dir, "a file where the folder should be").unwrap();
 
-        let later = at() + TimeDelta::hours(25);
+        let later = at() + SignedDuration::from_hours(25);
         let changed_table = SAMPLE_TABLE.replace("2e-06", "3e-06");
         assert!(
             apply(
@@ -297,7 +303,7 @@ mod tests {
         )
         .unwrap();
 
-        let later = at() + TimeDelta::hours(23);
+        let later = at() + SignedDuration::from_hours(23);
         assert_eq!(
             refresh_prices(&prices_dir, &multipliers_dir, later, || Err(
                 "unexpected download".into()
@@ -325,7 +331,7 @@ mod tests {
         )
         .unwrap();
 
-        let later = at() + TimeDelta::hours(25);
+        let later = at() + SignedDuration::from_hours(25);
         let download = || {
             Ok(Downloads {
                 table: SAMPLE_TABLE.to_owned(),
@@ -392,7 +398,7 @@ mod tests {
         )
         .unwrap();
 
-        let later = at() + TimeDelta::hours(25);
+        let later = at() + SignedDuration::from_hours(25);
         let warning = refresh_prices(&prices_dir, &multipliers_dir, later, || {
             Err("connection refused".into())
         });

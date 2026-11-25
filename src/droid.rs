@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::files::{LineError, files_with_suffix, for_each_json_line};
@@ -65,7 +65,7 @@ pub fn parse_settings(text: &str) -> Option<(Tokens, Option<String>)> {
 }
 
 /// Project directory and start time from a session transcript. Stops reading once both are known.
-pub fn parse_header(reader: impl BufRead) -> Option<(Option<String>, DateTime<Utc>)> {
+pub fn parse_header(reader: impl BufRead) -> Option<(Option<String>, Timestamp)> {
     let mut project = None;
     let mut started = None;
     // A line that is not valid UTF-8 or JSON is skipped, not fatal.
@@ -176,7 +176,7 @@ mod tests {
             "the project comes from the session start cwd"
         );
         assert_eq!(
-            started.to_rfc3339(),
+            started.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string(),
             "2026-10-05T15:04:35+00:00",
             "the start time is the first message timestamp in utc"
         );

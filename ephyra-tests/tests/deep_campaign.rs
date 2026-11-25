@@ -11,7 +11,6 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use droid_usage::app::{self, SourceRefresh};
 use droid_usage::model::Source as UsageSource;
 use droid_usage::multipliers::{self, Snapshot as MultSnapshot};
@@ -25,13 +24,20 @@ use droid_usage_ephyra::multipliers::{MultiplierPageCase, multiplier_pages};
 use droid_usage_ephyra::prices::{PriceTableCase, price_tables};
 use droid_usage_ephyra::pricing_report::{SessionBatch, session_batches};
 use ephyra::{Gen, GenExt, Source, gens, loops};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use rusqlite::{Connection, params};
 use unicode_width::UnicodeWidthStr;
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn utc(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap()
+fn utc(year: i16, month: i8, day: i8, hour: i8) -> Timestamp {
+    Date::new(year, month, day)
+        .unwrap()
+        .at(hour, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
 }
 
 struct TempHome(PathBuf);
@@ -269,7 +275,7 @@ fn pi_recorded_cost_stays_finite_when_present(input: PiExtremeCostInput) {
 
 #[derive(Debug, Clone)]
 struct AppAndRefreshCase {
-    since_cutoff: Option<NaiveDate>,
+    since_cutoff: Option<Date>,
     fail_mult_save: bool,
     corrupt_snapshot: bool,
     include_bad_entries: bool,
@@ -280,7 +286,7 @@ fn app_refresh_cases() -> impl Gen<Value = AppAndRefreshCase> {
     |g: &mut Source| {
         let since_cutoff = g
             .bool()
-            .then(|| NaiveDate::from_ymd_opt(2026, 10, g.int(1u32..=28)).expect("valid day"));
+            .then(|| Date::new(2026, 10, g.int(1i8..=28)).expect("valid day"));
         AppAndRefreshCase {
             since_cutoff,
             fail_mult_save: g.bool_with(0.3),
@@ -379,7 +385,7 @@ fn app_and_refresh_preserve_atomicity_and_report_across_sources(case: AppAndRefr
     ];
     if case
         .since_cutoff
-        .is_some_and(|d| d > NaiveDate::from_ymd_opt(2026, 10, 15).unwrap())
+        .is_some_and(|d| d > Date::new(2026, 10, 15).unwrap())
     {
         assert!(!out_text.contains("/work/p1"), "{out_text}");
         for src in sources {

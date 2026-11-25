@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 
 use crate::app::Mode;
 
@@ -13,7 +13,7 @@ pub struct Args {
     /// Whether prices are refreshed before the report.
     pub mode: Mode,
     /// Only sessions that started on or after this UTC date are counted.
-    pub since: Option<NaiveDate>,
+    pub since: Option<Date>,
 }
 
 /// An argument other than `--offline` or `--since`.
@@ -84,8 +84,8 @@ impl Error for ArgError {}
 /// # Errors
 ///
 /// Returns an [`InvalidSince`] that names the bad value.
-pub fn parse_since(text: &str) -> Result<NaiveDate, InvalidSince> {
-    NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|_error| InvalidSince(text.to_owned()))
+pub fn parse_since(text: &str) -> Result<Date, InvalidSince> {
+    Date::strptime("%Y-%m-%d", text).map_err(|_error| InvalidSince(text.to_owned()))
 }
 
 /// Reads the arguments: `--offline` selects [`Mode::Offline`], and `--since YYYY-MM-DD` keeps only sessions started on or after that date. No arguments select online mode with every session.
@@ -151,7 +151,7 @@ mod tests {
             parse_args(["--offline", "--since", "2026-10-24"]),
             Ok(Args {
                 mode: Mode::Offline,
-                since: Some(NaiveDate::from_ymd_opt(2026, 10, 24).unwrap()),
+                since: Some(Date::new(2026, 10, 24).unwrap()),
             }),
             "the since flag keeps sessions from its date on"
         );
@@ -183,15 +183,15 @@ mod tests {
     proptest! {
         #[test]
         fn any_printed_date_round_trips_through_the_since_flag(
-            year in 0i32..=9999,
-            month in 1u32..=12,
-            day in 1u32..=31,
+            year in 0i16..=9999,
+            month in 1i8..=12,
+            day in 1i8..=31,
         ) {
             // Days that do not exist in that month are not dates; skip them.
-            let Some(date) = NaiveDate::from_ymd_opt(year, month, day) else {
+            let Ok(date) = Date::new(year, month, day) else {
                 return Ok(());
             };
-            let text = date.format("%Y-%m-%d").to_string();
+            let text = date.strftime("%Y-%m-%d").to_string();
             prop_assert_eq!(parse_since(&text), Ok(date));
             prop_assert_eq!(
                 parse_args(["--since", text.as_str()]),
@@ -205,12 +205,12 @@ mod tests {
 
         #[test]
         fn impossible_dates_are_rejected(
-            year in 0i32..=9999,
-            month in 1u32..=12,
-            day in 29u32..=31,
+            year in 0i16..=9999,
+            month in 1i8..=12,
+            day in 29i8..=31,
         ) {
             // Days that exist are covered by the round trip; skip them.
-            if NaiveDate::from_ymd_opt(year, month, day).is_some() {
+            if Date::new(year, month, day).is_ok() {
                 return Ok(());
             }
             let text = format!("{year:04}-{month:02}-{day:02}");
@@ -224,7 +224,7 @@ mod tests {
         fn any_parsed_since_text_is_a_real_date(text in ".*") {
             // Whatever text parse_since accepts must itself print and parse back.
             if let Ok(date) = parse_since(&text) {
-                let printed = date.format("%Y-%m-%d").to_string();
+                let printed = date.strftime("%Y-%m-%d").to_string();
                 prop_assert_eq!(parse_since(&printed), Ok(date));
             }
         }

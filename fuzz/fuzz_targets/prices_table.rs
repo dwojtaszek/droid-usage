@@ -1,7 +1,7 @@
 #![no_main]
 
-use chrono::{TimeZone, Utc};
 use droid_usage::prices::{Snapshot, parse_table};
+use jiff::civil::Date;
 use libfuzzer_sys::fuzz_target;
 
 // The price table is downloaded JSON. Any input must either parse or return an error,
@@ -11,7 +11,12 @@ fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
-    let fetched = Utc.with_ymd_and_hms(2026, 10, 24, 0, 0, 0).unwrap();
+    let fetched = Date::new(2026, 10, 24)
+        .unwrap()
+        .at(0, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp();
     let Ok(snapshot) = parse_table(text, fetched) else {
         return;
     };

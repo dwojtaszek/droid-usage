@@ -7,7 +7,8 @@ use std::fmt::Display;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use jiff::Timestamp;
+use jiff::civil::Date;
 
 use crate::download::Downloads;
 use crate::model::{self, Session, Source};
@@ -103,8 +104,8 @@ type SourceReader = fn(&Path) -> Result<model::Read, String>;
 pub fn run<F>(
     home: &Path,
     refresh_mode: SourceRefresh<F>,
-    since: Option<NaiveDate>,
-    now: DateTime<Utc>,
+    since: Option<Date>,
+    now: Timestamp,
     colors: report::Colors,
     out: &mut impl Write,
     err: &mut impl Write,
@@ -208,9 +209,13 @@ mod tests {
     use crate::snapshots::last_checked;
     use crate::testing::{SAMPLE_PAGE, SAMPLE_TABLE, ScratchDir};
 
-    fn at() -> DateTime<Utc> {
-        use chrono::TimeZone;
-        Utc.with_ymd_and_hms(2026, 10, 25, 12, 0, 0).unwrap()
+    fn at() -> Timestamp {
+        Date::new(2026, 10, 25)
+            .unwrap()
+            .at(12, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
     /// A writer that fails every write with the given kind.
@@ -528,7 +533,7 @@ mod tests {
         .unwrap();
 
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let later = at() + chrono::TimeDelta::days(3);
+        let later = at() + jiff::SignedDuration::from_hours(72);
         run(
             &home,
             SourceRefresh::offline(),
@@ -570,8 +575,8 @@ mod tests {
             SAMPLE_PAGE,
         )
         .unwrap();
-        let on_the_day = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
-        let after = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let on_the_day = Date::new(2026, 10, 5).unwrap();
+        let after = Date::new(2026, 10, 6).unwrap();
 
         let (mut out, mut err) = (Vec::new(), Vec::new());
         run(

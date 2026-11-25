@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
-use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use ephyra::{Gen, GenExt, Source, gens};
+use jiff::Timestamp;
+use jiff::civil::Date;
 
 /// Binary option whose shrunk state (`No`, 2 chars) is strictly shorter in `Debug` than `Yes` (3 chars).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,14 +28,14 @@ pub struct ModelRowSpec {
     /// Positive finite multiplier rate.
     pub rate: f64,
     /// Optional `(through_date, post_promo_rate)` promotion specification.
-    pub promo: Option<(NaiveDate, f64)>,
+    pub promo: Option<(Date, f64)>,
 }
 
 /// Valid-by-construction Factory models page with optional duplicate-name noise.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiplierPageCase {
     /// Snapshot fetch timestamp.
-    pub fetched: DateTime<Utc>,
+    pub fetched: Timestamp,
     /// Primary model rows.
     pub rows: Vec<ModelRowSpec>,
     /// Whether to append an unnoted extra row sharing `rows[0].name`.
@@ -80,7 +81,7 @@ impl MultiplierPageCase {
             lines.push("<Note>".to_owned());
             for row in promo_rows {
                 if let Some((through, after)) = row.promo {
-                    let date_str = through.format("%B %d, %Y");
+                    let date_str = through.strftime("%B %d, %Y");
                     lines.push(format!(
                         "<sup>†</sup> Promotional pricing. {} bills at {}× through {date_str}, then returns to {after}×.",
                         row.name, row.rate
@@ -99,10 +100,9 @@ fn rate_gen() -> impl Gen<Value = f64> {
     ])
 }
 
-fn date_gen() -> impl Gen<Value = NaiveDate> {
-    gens::int(0i64..=900).map(|days| {
-        NaiveDate::from_ymd_opt(2025, 1, 1).expect("valid base date") + TimeDelta::days(days)
-    })
+fn date_gen() -> impl Gen<Value = Date> {
+    gens::int(0i64..=900)
+        .map(|days| Date::new(2025, 1, 1).expect("valid base date") + jiff::Span::new().days(days))
 }
 
 /// Predicate defining valid `MultiplierPageCase` inputs.
@@ -161,8 +161,8 @@ pub fn valid_multiplier_page_case(case: &MultiplierPageCase) -> bool {
 
 fn draw_case(g: &mut Source) -> MultiplierPageCase {
     let n = g.int(1usize..=8);
-    let base = DateTime::from_timestamp(1_760_000_000 + g.int(0i64..=30_000_000), 0)
-        .expect("valid timestamp");
+    let base =
+        Timestamp::new(1_760_000_000 + g.int(0i64..=30_000_000), 0).expect("valid timestamp");
     let mut rows = Vec::with_capacity(n);
     for idx in 0..n {
         let name = format!("Model-{idx}");

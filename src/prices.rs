@@ -8,7 +8,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
 use crate::model::{Tokens, count_f64, parse_timestamp};
@@ -44,7 +44,7 @@ impl Rate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// When the table was fetched (UTC).
-    pub fetched: DateTime<Utc>,
+    pub fetched: Timestamp,
     /// Rates keyed by the table's model key, for example `openai/gpt-5.5`.
     pub rates: BTreeMap<String, Rate>,
 }
@@ -93,7 +93,7 @@ impl From<io::Error> for PriceError {
 /// # Errors
 ///
 /// Returns an error when the text is not a JSON object or holds no usable rates.
-pub fn parse_table(text: &str, fetched: DateTime<Utc>) -> Result<Snapshot, PriceError> {
+pub fn parse_table(text: &str, fetched: Timestamp) -> Result<Snapshot, PriceError> {
     let Value::Object(entries) = serde_json::from_str(text).map_err(PriceError::Json)? else {
         return Err(PriceError::Shape("top level is not an object"));
     };
@@ -153,7 +153,7 @@ impl Snapshot {
             })
             .collect();
         json!({
-            "fetched": self.fetched.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "fetched": self.fetched.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
             "rates": rates,
         })
     }
@@ -225,7 +225,7 @@ impl PriceBook {
 
     /// The rate for `model` at time `at`. Uses the snapshot in effect at `at`, or the earliest snapshot when `at` comes before all of them.
     #[must_use]
-    pub fn rate_at(&self, model: &str, at: DateTime<Utc>) -> Option<Rate> {
+    pub fn rate_at(&self, model: &str, at: Timestamp) -> Option<Rate> {
         let entry = snapshot_in_effect(&self.snapshots, at, |item| item.snapshot.fetched)?;
         entry
             .snapshot
@@ -237,7 +237,7 @@ impl PriceBook {
 
     /// The rate under exactly the key `key` at time `at`. Unlike `rate_at`, it never falls back to another provider's key.
     #[must_use]
-    pub fn exact_rate_at(&self, key: &str, at: DateTime<Utc>) -> Option<Rate> {
+    pub fn exact_rate_at(&self, key: &str, at: Timestamp) -> Option<Rate> {
         let entry = snapshot_in_effect(&self.snapshots, at, |item| item.snapshot.fetched)?;
         entry.snapshot.rates.get(key).copied()
     }
@@ -279,9 +279,10 @@ pub fn save(dir: &Path, snapshot: &Snapshot) -> io::Result<Refresh> {
 
 #[cfg(test)]
 mod tests {
+    use jiff::civil::Date;
     use std::fs;
 
-    use chrono::{TimeDelta, TimeZone};
+    use jiff::SignedDuration;
     use proptest::prelude::{prop_assert, proptest};
 
     use super::*;
@@ -289,14 +290,19 @@ mod tests {
     use crate::testing::{RECORDED_TABLE, ScratchDir};
 
     /// Saves a parsed table and records the check, as one refresh does.
-    fn refresh(dir: &Path, now: DateTime<Utc>, table: &str) -> Result<Refresh, PriceError> {
+    fn refresh(dir: &Path, now: Timestamp, table: &str) -> Result<Refresh, PriceError> {
         let outcome = save(dir, &parse_table(table, now)?)?;
         record_check(dir, now)?;
         Ok(outcome)
     }
 
-    fn at(day: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, day, 12, 0, 0).unwrap()
+    fn at(day: i8) -> Timestamp {
+        Date::new(2026, 10, day)
+            .unwrap()
+            .at(12, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
     fn rate(input: f64) -> Rate {
@@ -308,7 +314,7 @@ mod tests {
         }
     }
 
-    fn snapshot(day: u32, models: &[(&str, f64)]) -> Snapshot {
+    fn snapshot(day: i8, models: &[(&str, f64)]) -> Snapshot {
         Snapshot {
             fetched: at(day),
             rates: models
@@ -567,11 +573,11 @@ mod tests {
             "the refresh instant is recorded as the last check time"
         );
         assert!(
-            !is_stale(&dir, at(10) + TimeDelta::hours(1)),
+            !is_stale(&dir, at(10) + SignedDuration::from_hours(1)),
             "a check one hour old is not yet stale"
         );
         assert!(
-            is_stale(&dir, at(11) + TimeDelta::hours(1)),
+            is_stale(&dir, at(11) + SignedDuration::from_hours(1)),
             "a check more than a day old is stale"
         );
 
@@ -799,13 +805,13 @@ mod tests {
             Refresh::Updated,
             "the first refresh of an empty folder stores the table"
         );
-        let day = TimeDelta::hours(24);
+        let day = SignedDuration::from_hours(24);
         assert!(
             !is_stale(&dir, at(10) + day),
             "a check exactly one day old is not yet stale"
         );
         assert!(
-            is_stale(&dir, at(10) + day + TimeDelta::seconds(1)),
+            is_stale(&dir, at(10) + day + SignedDuration::from_secs(1)),
             "a check one second over a day old is stale"
         );
     }

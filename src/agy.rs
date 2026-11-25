@@ -5,7 +5,7 @@ use std::io::{self, BufRead, BufReader, ErrorKind};
 use std::ops::ControlFlow;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::files::{LineError, for_each_json_line};
@@ -63,8 +63,8 @@ pub fn read_sessions(root: &Path) -> io::Result<Read> {
 }
 
 /// Earliest timestamp and summed usage from one transcript. Lines that do not parse are skipped.
-pub fn parse_transcript(reader: impl BufRead) -> Option<(DateTime<Utc>, Tokens)> {
-    let mut started: Option<DateTime<Utc>> = None;
+pub fn parse_transcript(reader: impl BufRead) -> Option<(Timestamp, Tokens)> {
+    let mut started: Option<Timestamp> = None;
     let mut tokens = Tokens::default();
     let _ = for_each_json_line(reader, LineError::Skip, |value| {
         if let Some(at) = value["created_at"].as_str().and_then(parse_timestamp) {
@@ -134,7 +134,7 @@ mod tests {
         );
         let (started, tokens) = parse_transcript(Cursor::new(text)).unwrap();
         assert_eq!(
-            started.to_rfc3339(),
+            started.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string(),
             "2026-10-05T15:04:35+00:00",
             "the start time is the earliest transcript timestamp"
         );
@@ -221,7 +221,7 @@ mod tests {
         );
         let (started, _) = parse_transcript(Cursor::new(text)).unwrap();
         assert_eq!(
-            started.to_rfc3339(),
+            started.strftime("%Y-%m-%dT%H:%M:%S%.f%:z").to_string(),
             "2026-10-05T08:00:00+00:00",
             "the earliest time is picked by instant not by text"
         );

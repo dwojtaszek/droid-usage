@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use droid_usage::agy::{self, first_model_name};
 use droid_usage::app::Mode;
 use droid_usage::cli::{self, ArgError};
@@ -33,11 +32,13 @@ use droid_usage_ephyra::opencode_agy::{
 use droid_usage_ephyra::prices::{PriceEntryKind, PriceTableCase, price_tables};
 use droid_usage_ephyra::pricing_report::{SessionBatch, session_batches};
 use droid_usage_ephyra::transcripts::{CodexStream, PiLine, PiStream, codex_streams, pi_streams};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use rusqlite::{Connection, params};
 use unicode_width::UnicodeWidthStr;
 
-fn at_ts(secs: i64) -> DateTime<Utc> {
-    DateTime::from_timestamp(secs, 0).expect("valid timestamp")
+fn at_ts(secs: i64) -> Timestamp {
+    Timestamp::new(secs, 0).expect("valid timestamp")
 }
 
 #[ephyra::test(gen = multiplier_pages(), config = droid_usage_config())]
@@ -54,15 +55,25 @@ fn multipliers_valid_pages_parse_roundtrip_and_apply_promos(case: MultiplierPage
 
     let book = MultiplierBook::new(vec![snapshot]);
     for row in &case.rows {
-        let during = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let during = Date::new(2025, 1, 1)
+            .unwrap()
+            .at(0, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
         if let Some((through, after)) = row.promo {
-            let on_last_day = through.and_hms_opt(23, 59, 59).unwrap().and_utc();
+            let on_last_day = through
+                .at(23, 59, 59, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp();
             let after_day = through
-                .succ_opt()
+                .tomorrow()
                 .unwrap()
-                .and_hms_opt(0, 0, 0)
+                .at(0, 0, 0, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
                 .unwrap()
-                .and_utc();
+                .timestamp();
             assert_eq!(book.multiplier_at(&row.id, on_last_day), Some(row.rate));
             assert_eq!(book.multiplier_at(&row.id, after_day), Some(after));
         } else {
@@ -312,7 +323,7 @@ fn opencode_read_from_handles_mixed_types_and_invalid_values(table: OpenCodeTabl
             Some(Err(s)) => rusqlite::types::Value::Text(s.clone()),
         };
         if let Some(Ok(ms)) = row.time_created
-            && DateTime::from_timestamp_millis(ms).is_some()
+            && Timestamp::from_millisecond(ms).is_ok()
         {
             let model = row.model.as_deref().and_then(|s| match s {
                 r#"{"providerID":"only"}"# => None,
@@ -364,7 +375,7 @@ fn opencode_read_from_handles_mixed_types_and_invalid_values(table: OpenCodeTabl
     assert_eq!(read.skipped, expected_skipped);
     for (session, (ms, dir, model, tokens, cost)) in read.sessions.iter().zip(expected) {
         assert_eq!(session.source, Source::OpenCode);
-        assert_eq!(session.started.timestamp_millis(), ms);
+        assert_eq!(session.started.as_millisecond(), ms);
         assert_eq!(session.project, dir);
         assert_eq!(session.model, model);
         assert_eq!(session.tokens, tokens);
@@ -392,7 +403,7 @@ fn agy_transcript_is_order_independent_for_earliest_time_and_sum(transcript: Agy
         .map(|l| {
             format!(
                 r#"{{"created_at":"{}","input_tokens":{},"output_tokens":{},"cache_read_tokens":{}}}"#,
-                at_ts(l.ts_secs).to_rfc3339(),
+                at_ts(l.ts_secs).strftime("%Y-%m-%dT%H:%M:%S%.f%:z"),
                 l.input,
                 l.output,
                 l.cache_read
@@ -407,7 +418,7 @@ fn agy_transcript_is_order_independent_for_earliest_time_and_sum(transcript: Agy
         .map(|l| {
             format!(
                 r#"{{"created_at":"{}","input_tokens":{},"output_tokens":{},"cache_read_tokens":{}}}"#,
-                at_ts(l.ts_secs).to_rfc3339(),
+                at_ts(l.ts_secs).strftime("%Y-%m-%dT%H:%M:%S%.f%:z"),
                 l.input,
                 l.output,
                 l.cache_read
@@ -465,7 +476,7 @@ fn pricing_summary_and_report_preserve_invariants(batch: SessionBatch) {
     let prices = PriceBook::new(vec![prices::parse_table(price_page, snap_time).unwrap()]);
     let multipliers =
         MultiplierBook::new(vec![multipliers::parse_page(mult_page, snap_time).unwrap()]);
-    let promo_cutoff = NaiveDate::from_ymd_opt(2026, 11, 22).unwrap();
+    let promo_cutoff = Date::new(2026, 11, 22).unwrap();
 
     let mut sessions = batch.sessions;
     let original_recorded: Vec<Option<f64>> = sessions.iter().map(|s| s.cost_usd).collect();
@@ -481,16 +492,20 @@ fn pricing_summary_and_report_preserve_invariants(batch: SessionBatch) {
                 _ => None,
             };
             let mult = match model {
-                Some("gpt-5.6-sol") => Some(if session.started.date_naive() > promo_cutoff {
-                    2.0
-                } else {
-                    1.6
-                }),
-                Some("gpt-5.6-sol-fast") => Some(if session.started.date_naive() > promo_cutoff {
-                    4.0
-                } else {
-                    3.2
-                }),
+                Some("gpt-5.6-sol") => Some(
+                    if session.started.to_zoned(jiff::tz::TimeZone::UTC).date() > promo_cutoff {
+                        2.0
+                    } else {
+                        1.6
+                    },
+                ),
+                Some("gpt-5.6-sol-fast") => Some(
+                    if session.started.to_zoned(jiff::tz::TimeZone::UTC).date() > promo_cutoff {
+                        4.0
+                    } else {
+                        3.2
+                    },
+                ),
                 Some("glm-5.2") => Some(0.56),
                 Some("gemini-3.8-flash-ultrafast") => Some(2.0),
                 _ => None,
@@ -571,10 +586,10 @@ fn pricing_summary_and_report_preserve_invariants(batch: SessionBatch) {
 
     // `retain_since` exact completeness check.
     if let Some(first) = sessions.first() {
-        let cutoff = first.started.date_naive();
+        let cutoff = first.started.to_zoned(jiff::tz::TimeZone::UTC).date();
         let expected: Vec<Session> = sessions
             .iter()
-            .filter(|s| s.started.date_naive() >= cutoff)
+            .filter(|s| s.started.to_zoned(jiff::tz::TimeZone::UTC).date() >= cutoff)
             .cloned()
             .collect();
         let mut filtered = sessions;
@@ -607,7 +622,7 @@ fn cli_parse_args_matches_reference_model(case: CliArgCase) {
                     expected_err = Some(ExpectedCliErr::MissingSince);
                     break;
                 };
-                if let Ok(date) = NaiveDate::parse_from_str(val, "%Y-%m-%d") {
+                if let Ok(date) = Date::strptime("%Y-%m-%d", val) {
                     expected_since = Some(date);
                 } else {
                     expected_err = Some(ExpectedCliErr::InvalidSince(val.to_owned()));

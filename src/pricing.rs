@@ -36,7 +36,8 @@ pub fn price_sessions(sessions: &mut [Session], prices: &PriceBook, multipliers:
 mod tests {
     use std::collections::BTreeMap;
 
-    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+    use jiff::Timestamp;
+    use jiff::civil::Date;
 
     use super::*;
     use crate::model::Tokens;
@@ -44,11 +45,16 @@ mod tests {
     use crate::prices::{Rate, Snapshot as PriceSnapshot, parse_table};
     use crate::testing::{RECORDED_TABLE, SAMPLE_PAGE};
 
-    fn at(month: u32, day: u32, hour: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, month, day, hour, 0, 0).unwrap()
+    fn at(month: i8, day: i8, hour: i8) -> Timestamp {
+        Date::new(2026, month, day)
+            .unwrap()
+            .at(hour, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
     }
 
-    fn list_book(day: DateTime<Utc>, models: &[(&str, f64)]) -> PriceBook {
+    fn list_book(day: Timestamp, models: &[(&str, f64)]) -> PriceBook {
         let rates = models
             .iter()
             .map(|(key, input)| {
@@ -70,7 +76,7 @@ mod tests {
     fn session(
         source: Source,
         model: Option<&str>,
-        started: DateTime<Utc>,
+        started: Timestamp,
         cost_usd: Option<f64>,
     ) -> Session {
         Session {
@@ -213,11 +219,12 @@ mod tests {
     fn promo_end_day_boundary_applies_through_multipliers_in_pricing() {
         let prices = list_book(at(10, 1, 0), &[("gpt-5.6-sol", 2e-6)]);
         let multipliers = MultiplierBook::new(vec![parse_page(SAMPLE_PAGE, at(10, 1, 0)).unwrap()]);
-        let last_day = NaiveDate::from_ymd_opt(2026, 11, 22)
+        let last_day = Date::new(2026, 11, 22)
             .unwrap()
-            .and_hms_opt(23, 59, 59)
+            .at(23, 59, 59, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
             .unwrap()
-            .and_utc();
+            .timestamp();
         let mut s = session(Source::Droid, Some("gpt-5.6-sol"), last_day, None);
         price_sessions(std::slice::from_mut(&mut s), &prices, &multipliers);
         assert!((s.cost_usd.unwrap() - 2.0 * 1.6).abs() < 1e-9);
