@@ -80,7 +80,8 @@ pub fn parse_transcript(reader: impl BufRead) -> Option<Session> {
         project,
         model,
         tokens,
-        cost_usd,
+        // An unrepresentable recorded total falls back to price-table lookup.
+        cost_usd: cost_usd.filter(|cost| cost.is_finite()),
     })
 }
 
@@ -164,6 +165,14 @@ mod tests {
         );
         let session = parse_transcript(Cursor::new(text)).unwrap();
         assert_eq!(session.tokens.total(), 21);
+        assert_eq!(session.cost_usd, None);
+    }
+
+    #[test]
+    fn overflowing_recorded_cost_leaves_tokens_available_for_price_lookup() {
+        let usage = r#"{"type":"usage","usage":{"input":1,"output":2,"cost":{"total":1e308}}}"#;
+        let session = parse_transcript(Cursor::new(format!("{HEADER}{usage}\n{usage}"))).unwrap();
+        assert_eq!(session.tokens.total(), 6);
         assert_eq!(session.cost_usd, None);
     }
 
