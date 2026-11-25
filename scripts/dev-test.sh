@@ -36,7 +36,7 @@ while IFS= read -r file; do
         tests/golden/*) integration_tests+=(binary) ;;
         tests/common/*) integration_tests+=(binary readers) ;;
         tests/*.rs) integration_tests+=("$(basename "$file" .rs)") ;;
-        *.md | docs/* | evals/* | fuzz/* | scripts/* | .factory/* | .github/* | LICENSE | .gitignore) ;;
+        *.md | docs/* | evals/* | ephyra-tests/* | fuzz/* | scripts/* | .factory/* | .github/* | LICENSE | .gitignore) ;;
         *) run_all=1 ;;
     esac
 done <<<"$changed"

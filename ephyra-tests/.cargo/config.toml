@@ -1,0 +1,4 @@
+[env]
+LLVM_PROFILE_FILE = { value = "target/profraw/%m_%p.profraw", relative = true }
+EPHYRA_COVERAGE_FILTER = "droid_usage"
+RUST_TEST_THREADS = "1"
